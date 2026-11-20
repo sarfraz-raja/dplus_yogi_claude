@@ -1,0 +1,23 @@
+# Secrets (keep .env.example)
+.env
+
+# Tests (local only)
+tests/
+pytest.ini
+.pytest_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Runtime data
+*.db
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*Zone.Identifier

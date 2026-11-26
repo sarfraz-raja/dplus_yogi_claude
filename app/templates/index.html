@@ -4,10 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
   <title>Yogi by DataYog — Telecom KPI Analytics</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>tailwind.config = { darkMode: 'class' };</script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.2.3/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -17,16 +19,20 @@
       --surface: rgba(255,255,255,0.85);
       --border: rgba(0,0,0,0.08);
       --accent: #4f46e5;
+      --chart-surface: #fcfcfb;
+      --chart-text: #52514e;
+      --chart-grid: #e1e0d9;
     }
     .dark {
       --bg: #07091a;
       --surface: rgba(10,15,35,0.9);
       --border: rgba(255,255,255,0.06);
+      --chart-surface: #1a1a19;
+      --chart-text: #c3c2b7;
+      --chart-grid: #2c2c2a;
     }
     * { font-family: 'Inter', system-ui, sans-serif; box-sizing: border-box; }
     body { background: var(--bg); }
-
-    /* Network grid bg */
     .dark body::before {
       content: '';
       position: fixed; inset: 0; pointer-events: none; z-index: 0;
@@ -35,57 +41,35 @@
         linear-gradient(90deg, rgba(79,70,229,0.03) 1px, transparent 1px);
       background-size: 40px 40px;
     }
-
-    .glass {
-      background: var(--surface);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-    }
-
-    /* Scrollbar */
+    .glass { background: var(--surface); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid var(--border); }
     .scroll::-webkit-scrollbar { width: 4px; height: 4px; }
     .scroll::-webkit-scrollbar-track { background: transparent; }
     .scroll::-webkit-scrollbar-thumb { background: rgba(79,70,229,0.3); border-radius: 99px; }
-
-    /* Message animation */
     .msg-in { animation: msgIn 0.25s ease; }
-    @keyframes msgIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Typing dots */
+    @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; animation: bounce 1.2s infinite; }
     .dot:nth-child(2) { animation-delay: 0.2s; }
     .dot:nth-child(3) { animation-delay: 0.4s; }
     @keyframes bounce { 0%,60%,100%{ transform:translateY(0) } 30%{ transform:translateY(-6px) } }
-
-    /* Input glow */
     .input-wrap:focus-within { box-shadow: 0 0 0 2px rgba(99,102,241,0.4), 0 8px 32px -8px rgba(99,102,241,0.25); }
-
-    /* Sidebar slide */
     .sidebar-slide { transition: transform 0.28s cubic-bezier(.4,0,.2,1); }
-
-    /* KPI pill */
     .kpi-tag { font-family: 'JetBrains Mono', monospace; font-size: 10px; }
-
-    /* Status dot */
     .online { box-shadow: 0 0 0 3px rgba(34,197,94,0.25); }
-
-    /* Prompt card hover */
     .prompt-card:hover { transform: translateY(-2px); }
     .prompt-card { transition: all 0.18s ease; }
-
-    /* Prose overrides */
-    .prose h1,.prose h2,.prose h3 { margin-top: 1em; margin-bottom: 0.4em; }
+    .prose h1,.prose h2,.prose h3 { margin-top: 1em; margin-bottom: 0.4em; font-weight: 600; }
     .prose p { margin: 0.4em 0; }
-    .prose ul,.prose ol { margin: 0.4em 0; padding-left: 1.4em; }
+    .prose ul,.prose ol { margin: 0.4em 0; padding-left: 1.4em; list-style: disc; }
+    .prose ol { list-style: decimal; }
+    .prose li { margin: 0.15em 0; }
+    .prose strong { font-weight: 600; }
     .prose code { font-family: 'JetBrains Mono', monospace; font-size: 0.82em; background: rgba(99,102,241,0.12); padding: 1px 5px; border-radius: 4px; }
     .prose pre { margin: 0.6em 0; }
-
-    /* Signal bars */
     .bar { width: 3px; border-radius: 2px; background: #6366f1; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .data-table th { position: sticky; top: 0; z-index: 1; }
+    .ac-item[aria-selected="true"] { background: rgba(99,102,241,0.15); }
   </style>
 </head>
 <body class="antialiased h-[100dvh] overflow-hidden text-slate-800 dark:text-slate-200 relative">
@@ -95,7 +79,6 @@
   <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
   <aside id="sidebar" class="sidebar-slide absolute md:relative z-40 h-full w-72 flex-shrink-0 -translate-x-full md:translate-x-0 glass shadow-2xl md:shadow-none flex flex-col">
 
-    <!-- Brand -->
     <div class="flex items-center gap-3 px-4 pt-5 pb-4 border-b border-indigo-500/10">
       <img src="/uploads/dy-logo.png" alt="Yogi by DataYog" class="h-9 w-9 rounded-xl object-cover ring-2 ring-indigo-500/30">
       <div class="flex-1 min-w-0">
@@ -107,7 +90,6 @@
       </span>
     </div>
 
-    <!-- New Chat -->
     <div class="px-3 pt-3">
       <button id="newChatBtn" class="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition shadow-lg shadow-indigo-600/25 active:scale-[0.98]">
         <i data-lucide="plus" class="w-4 h-4"></i>
@@ -116,86 +98,65 @@
       </button>
     </div>
 
-    <!-- Quick Queries -->
-    <div class="px-3 pt-4">
-      <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">Quick Queries</p>
-      <div class="space-y-0.5">
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="top 10 degraded sites yesterday">
-          <i data-lucide="alert-triangle" class="w-3.5 h-3.5 flex-shrink-0 text-rose-400 group-hover:text-rose-500"></i>
-          <span class="truncate">Top 10 Degraded Sites</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="worst cells last 7 days">
-          <i data-lucide="radio-tower" class="w-3.5 h-3.5 flex-shrink-0 text-amber-400 group-hover:text-amber-500"></i>
-          <span class="truncate">Worst Cells Last 7 Days</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="vendor comparison">
-          <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 flex-shrink-0 text-blue-400 group-hover:text-blue-500"></i>
-          <span class="truncate">Vendor Comparison</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="availability below 95%">
-          <i data-lucide="shield-alert" class="w-3.5 h-3.5 flex-shrink-0 text-orange-400 group-hover:text-orange-500"></i>
-          <span class="truncate">Availability Below 95%</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="traffic trend last 30 days">
-          <i data-lucide="trending-up" class="w-3.5 h-3.5 flex-shrink-0 text-emerald-400 group-hover:text-emerald-500"></i>
-          <span class="truncate">Traffic Trend 30 Days</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="best performing sites last 7 days">
-          <i data-lucide="star" class="w-3.5 h-3.5 flex-shrink-0 text-indigo-400 group-hover:text-indigo-500"></i>
-          <span class="truncate">Best Performing Sites</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="worst region by CSSR">
-          <i data-lucide="map-pin" class="w-3.5 h-3.5 flex-shrink-0 text-purple-400 group-hover:text-purple-500"></i>
-          <span class="truncate">Worst Region by CSSR</span>
-        </button>
-        <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="highest utilization sites">
-          <i data-lucide="cpu" class="w-3.5 h-3.5 flex-shrink-0 text-cyan-400 group-hover:text-cyan-500"></i>
-          <span class="truncate">Highest Utilization Sites</span>
-        </button>
+    <div class="flex-1 min-h-0 overflow-y-auto scroll">
+      <div class="px-3 pt-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">Quick Queries</p>
+        <div class="space-y-0.5" id="quickList">
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="top 10 degraded sites yesterday">
+            <i data-lucide="alert-triangle" class="w-3.5 h-3.5 flex-shrink-0 text-rose-400"></i><span class="truncate">Top 10 Degraded Sites</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="worst cells last 7 days">
+            <i data-lucide="radio-tower" class="w-3.5 h-3.5 flex-shrink-0 text-amber-400"></i><span class="truncate">Worst Cells Last 7 Days</span>
+          </button>
+          <button id="qSite" class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="Zomba_Dam site analysis last 7 days">
+            <i data-lucide="map-pin" class="w-3.5 h-3.5 flex-shrink-0 text-purple-400"></i><span class="truncate">Single Site Analysis</span>
+          </button>
+          <button id="qRegions" class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="compare Lilongwe vs Blantyre CSSR and availability last 7 days">
+            <i data-lucide="git-compare" class="w-3.5 h-3.5 flex-shrink-0 text-blue-400"></i><span class="truncate">Region vs Region</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="data success rate by technology and region this month">
+            <i data-lucide="layers" class="w-3.5 h-3.5 flex-shrink-0 text-cyan-400"></i><span class="truncate">Technology × Region</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="sites degraded most in CSSR compared to previous week">
+            <i data-lucide="trending-down" class="w-3.5 h-3.5 flex-shrink-0 text-rose-400"></i><span class="truncate">Degraded vs Last Week</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="availability below 95% last 7 days">
+            <i data-lucide="shield-alert" class="w-3.5 h-3.5 flex-shrink-0 text-orange-400"></i><span class="truncate">Availability Below 95%</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="down cells by region yesterday">
+            <i data-lucide="power-off" class="w-3.5 h-3.5 flex-shrink-0 text-red-400"></i><span class="truncate">Down Cells by Region</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="worst 10 cells by drop rate last 7 days">
+            <i data-lucide="phone-off" class="w-3.5 h-3.5 flex-shrink-0 text-amber-400"></i><span class="truncate">Worst Cells by Drop Rate</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="traffic trend last 30 days by region">
+            <i data-lucide="trending-up" class="w-3.5 h-3.5 flex-shrink-0 text-emerald-400"></i><span class="truncate">Traffic Trend by Region</span>
+          </button>
+          <button class="quick-q w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-indigo-500/10 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition text-xs group" data-q="vendor comparison">
+            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 flex-shrink-0 text-blue-400"></i><span class="truncate">Vendor Comparison</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="px-3 pt-4">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">KPI Reference</p>
+        <div class="grid grid-cols-2 gap-1">
+          <div class="px-2 py-1.5 rounded-lg bg-indigo-500/5 border border-indigo-500/10"><p class="kpi-tag text-indigo-400 font-semibold">CSSR</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Call Setup Success · 2G/3G</p></div>
+          <div class="px-2 py-1.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10"><p class="kpi-tag text-emerald-400 font-semibold">AVAIL</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Network Availability</p></div>
+          <div class="px-2 py-1.5 rounded-lg bg-rose-500/5 border border-rose-500/10"><p class="kpi-tag text-rose-400 font-semibold">DROP RATE</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Drops / Assignments · 2G/3G</p></div>
+          <div class="px-2 py-1.5 rounded-lg bg-blue-500/5 border border-blue-500/10"><p class="kpi-tag text-blue-400 font-semibold">DATA_SR</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Data Success Rate</p></div>
+          <div class="px-2 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/10"><p class="kpi-tag text-amber-400 font-semibold">CS_TRF</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Voice Traffic (Erl)</p></div>
+          <div class="px-2 py-1.5 rounded-lg bg-purple-500/5 border border-purple-500/10"><p class="kpi-tag text-purple-400 font-semibold">DL/UL VOL</p><p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Data Volume</p></div>
+        </div>
+      </div>
+
+      <div class="px-3 pt-4 pb-2">
+        <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">Recent Queries</p>
+        <div id="historyList" class="space-y-0.5"><p class="text-xs text-slate-500 px-2 py-1">Loading...</p></div>
       </div>
     </div>
 
-    <!-- KPI Dictionary -->
-    <div class="px-3 pt-4">
-      <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">KPI Reference</p>
-      <div class="grid grid-cols-2 gap-1">
-        <div class="px-2 py-1.5 rounded-lg bg-indigo-500/5 border border-indigo-500/10">
-          <p class="kpi-tag text-indigo-400 font-semibold">CSSR_BH</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Call Setup Success Rate</p>
-        </div>
-        <div class="px-2 py-1.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
-          <p class="kpi-tag text-emerald-400 font-semibold">AVAIL</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Network Availability</p>
-        </div>
-        <div class="px-2 py-1.5 rounded-lg bg-rose-500/5 border border-rose-500/10">
-          <p class="kpi-tag text-rose-400 font-semibold">TCH_DROP</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">TCH Drop Rate</p>
-        </div>
-        <div class="px-2 py-1.5 rounded-lg bg-blue-500/5 border border-blue-500/10">
-          <p class="kpi-tag text-blue-400 font-semibold">DATA_SR</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Data Success Rate</p>
-        </div>
-        <div class="px-2 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/10">
-          <p class="kpi-tag text-amber-400 font-semibold">UTIL</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">Cell Utilization</p>
-        </div>
-        <div class="px-2 py-1.5 rounded-lg bg-purple-500/5 border border-purple-500/10">
-          <p class="kpi-tag text-purple-400 font-semibold">CS_TRF</p>
-          <p class="text-[9px] text-slate-500 mt-0.5 leading-tight">CS Traffic Daily</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Recent History -->
-    <div class="px-3 pt-4 flex-1 min-h-0 flex flex-col">
-      <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-1 mb-2">Recent Queries</p>
-      <div id="historyList" class="space-y-0.5 overflow-y-auto scroll flex-1">
-        <p class="text-xs text-slate-500 px-2 py-1">Loading...</p>
-      </div>
-    </div>
-
-    <!-- Footer / Status -->
-    <div class="px-3 pb-4 pt-3 border-t border-indigo-500/10 mt-2">
+    <div class="px-3 pb-4 pt-3 border-t border-indigo-500/10">
       <div id="statusBar" class="flex items-center gap-2 px-2 py-2 rounded-xl bg-slate-900/40 dark:bg-slate-800/40">
         <div class="flex-1 space-y-1">
           <div class="flex items-center gap-1.5">
@@ -216,7 +177,7 @@
           <p class="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">DataYog Analytics</p>
           <p class="text-[10px] text-slate-400 truncate">datayog.com</p>
         </div>
-        <button id="themeBtn" class="p-1.5 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition text-slate-400">
+        <button id="themeBtn" class="p-1.5 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition text-slate-400" title="Toggle theme">
           <i data-lucide="moon" class="w-3.5 h-3.5 hidden dark:block"></i>
           <i data-lucide="sun" class="w-3.5 h-3.5 block dark:hidden"></i>
         </button>
@@ -224,23 +185,19 @@
     </div>
   </aside>
 
-  <!-- Mobile backdrop -->
   <div id="backdrop" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden hidden"></div>
 
   <!-- ═══════════════════════ MAIN ═══════════════════════ -->
-  <main class="flex-1 flex flex-col h-full relative overflow-hidden">
+  <main class="flex-1 flex flex-col h-full relative overflow-hidden min-w-0">
 
-    <!-- Header -->
     <header class="flex-shrink-0 glass border-b border-indigo-500/10 px-4 py-3 z-20">
       <div class="flex items-center justify-between max-w-5xl mx-auto">
         <div class="flex items-center gap-3">
           <button id="menuToggle" class="md:hidden p-2 -ml-1 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition">
             <i data-lucide="menu" class="w-5 h-5"></i>
           </button>
-          <!-- Signal bars (decorative) -->
           <div class="hidden sm:flex items-end gap-0.5 h-4">
-            <div class="bar h-1"></div><div class="bar h-2"></div>
-            <div class="bar h-3"></div><div class="bar h-4"></div>
+            <div class="bar h-1"></div><div class="bar h-2"></div><div class="bar h-3"></div><div class="bar h-4"></div>
           </div>
           <div>
             <p class="text-sm font-bold text-slate-900 dark:text-white leading-none">Yogi <span class="font-normal text-slate-400">by DataYog</span></p>
@@ -248,86 +205,73 @@
           </div>
         </div>
         <div class="flex items-center gap-1.5">
-          <!-- DB badge -->
+          <div id="dataRangeBadge" class="hidden md:flex items-center gap-1.5 text-[10px] font-medium px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-slate-500" title="Dates available in the KPI table">
+            <i data-lucide="calendar" class="w-3 h-3"></i><span id="dataRangeLabel"></span>
+          </div>
           <div id="headerDbBadge" class="hidden sm:flex items-center gap-1.5 text-[10px] font-medium px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-slate-500">
             <span id="headerDbDot" class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
             <span id="headerDbLabel">DB</span>
           </div>
           <button id="clearBtn" title="New Chat" class="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition text-slate-500 hover:text-indigo-500">
-            <i data-lucide="square-pen" class="w-4.5 h-4.5"></i>
+            <i data-lucide="square-pen" class="w-4 h-4"></i>
           </button>
-          <button id="themeToggleHeader" class="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition text-slate-500">
-            <i data-lucide="moon" class="w-4.5 h-4.5 hidden dark:block"></i>
-            <i data-lucide="sun" class="w-4.5 h-4.5 block dark:hidden"></i>
+          <button id="themeToggleHeader" title="Toggle theme" class="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition text-slate-500">
+            <i data-lucide="moon" class="w-4 h-4 hidden dark:block"></i>
+            <i data-lucide="sun" class="w-4 h-4 block dark:hidden"></i>
           </button>
         </div>
       </div>
     </header>
 
-    <!-- Chat area -->
     <div class="flex-1 overflow-y-auto scroll px-3 md:px-6 py-6" id="chatContainer">
       <div class="max-w-4xl mx-auto space-y-6" id="messageList">
 
-        <!-- Empty State -->
         <div id="emptyState" class="py-10 text-center">
           <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 shadow-2xl shadow-indigo-500/30 mb-4">
             <i data-lucide="network" class="w-8 h-8 text-white"></i>
           </div>
           <h2 class="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Yogi <span class="text-indigo-400 font-medium">by DataYog</span></h2>
           <p class="text-slate-500 dark:text-slate-400 mt-1.5 text-sm max-w-sm mx-auto">The wise AI that transforms telecom data into actionable intelligence.</p>
-
-          <!-- Category chips -->
           <div class="flex flex-wrap justify-center gap-2 mt-5 mb-6">
             <span class="text-[11px] px-3 py-1 rounded-full bg-rose-500/10 text-rose-500 border border-rose-500/20 font-medium">Sites & Cells</span>
-            <span class="text-[11px] px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 font-medium">Vendors</span>
-            <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium">Regions</span>
-            <span class="text-[11px] px-3 py-1 rounded-full bg-purple-500/10 text-purple-500 border border-purple-500/20 font-medium">KPI Trends</span>
-            <span class="text-[11px] px-3 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 font-medium">Date Range</span>
+            <span class="text-[11px] px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 font-medium">Regions</span>
+            <span class="text-[11px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium">2G · 3G · 4G · 5G</span>
+            <span class="text-[11px] px-3 py-1 rounded-full bg-purple-500/10 text-purple-500 border border-purple-500/20 font-medium">Trends & Comparisons</span>
+            <span class="text-[11px] px-3 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 font-medium">Any Date Range</span>
           </div>
-
-          <!-- Prompt cards -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl mx-auto mt-4 text-left">
-            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md hover:border-indigo-300/50 dark:hover:border-indigo-700/50 text-left group" data-q="top 10 degraded sites yesterday">
+            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md text-left group" data-q="top 10 degraded sites yesterday">
               <div class="flex items-start gap-3">
                 <span class="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="alert-triangle" class="w-4 h-4 text-rose-500"></i></span>
-                <div>
-                  <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Top 10 Degraded Sites</p>
-                  <p class="text-xs text-slate-500 mt-0.5">Worst CSSR sites from yesterday</p>
-                </div>
+                <div><p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Top 10 Degraded Sites</p>
+                <p class="text-xs text-slate-500 mt-0.5">Worst sites on the latest day</p></div>
               </div>
             </button>
-            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md hover:border-indigo-300/50 dark:hover:border-indigo-700/50 text-left group" data-q="vendor comparison">
+            <button id="cardSite" class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md text-left group" data-q="Zomba_Dam site analysis last 7 days">
               <div class="flex items-start gap-3">
-                <span class="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-500"></i></span>
-                <div>
-                  <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Vendor Comparison</p>
-                  <p class="text-xs text-slate-500 mt-0.5">Compare KPIs across all vendors</p>
-                </div>
+                <span class="w-8 h-8 rounded-xl bg-purple-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="map-pin" class="w-4 h-4 text-purple-500"></i></span>
+                <div><p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Single Site Analysis</p>
+                <p class="text-xs text-slate-500 mt-0.5" id="cardSiteText">Daily KPIs for one site</p></div>
               </div>
             </button>
-            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md hover:border-indigo-300/50 dark:hover:border-indigo-700/50 text-left group" data-q="traffic trend last 30 days">
+            <button id="cardRegions" class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md text-left group" data-q="compare Lilongwe vs Blantyre CSSR and availability last 7 days">
               <div class="flex items-start gap-3">
-                <span class="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="trending-up" class="w-4 h-4 text-emerald-500"></i></span>
-                <div>
-                  <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Traffic Trend</p>
-                  <p class="text-xs text-slate-500 mt-0.5">CS traffic over last 30 days</p>
-                </div>
+                <span class="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="git-compare" class="w-4 h-4 text-blue-500"></i></span>
+                <div><p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Compare Regions</p>
+                <p class="text-xs text-slate-500 mt-0.5">Side-by-side KPIs</p></div>
               </div>
             </button>
-            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md hover:border-indigo-300/50 dark:hover:border-indigo-700/50 text-left group" data-q="availability below 95%">
+            <button class="prompt-card p-4 rounded-2xl glass shadow-sm hover:shadow-md text-left group" data-q="worst 4G cells by data success rate in each region last 7 days">
               <div class="flex items-start gap-3">
-                <span class="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="shield-alert" class="w-4 h-4 text-amber-500"></i></span>
-                <div>
-                  <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Low Availability</p>
-                  <p class="text-xs text-slate-500 mt-0.5">Sites with availability &lt; 95%</p>
-                </div>
+                <span class="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center flex-shrink-0"><i data-lucide="radio-tower" class="w-4 h-4 text-amber-500"></i></span>
+                <div><p class="text-sm font-semibold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Worst 4G Cells</p>
+                <p class="text-xs text-slate-500 mt-0.5">Data success rate by region</p></div>
               </div>
             </button>
           </div>
         </div>
 
-        <!-- Welcome message -->
-        <div class="msg-in flex gap-3" data-role="assistant">
+        <div class="msg-in flex gap-3" data-role="welcome">
           <div class="flex-shrink-0 w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-500/30">
             <i data-lucide="bot" class="w-4 h-4 text-white"></i>
           </div>
@@ -338,15 +282,15 @@
                 <span class="text-[10px] text-slate-400">by DataYog · Telecom KPI Analytics</span>
               </div>
               <p class="text-sm text-slate-700 dark:text-slate-200 leading-relaxed">
-                Namaste! I'm <strong>Yogi</strong> — your intelligent guide for network operations. I can analyze your <strong>KPI data</strong> from the PostgreSQL database and answer queries about:
+                Namaste! I'm <strong>Yogi</strong> — your intelligent guide for network operations. Ask about any <strong>site, cell, region or technology</strong> — one or many, combined with any KPI and date range, in English or Hinglish:
               </p>
-              <div class="grid grid-cols-2 gap-1.5 mt-3">
-                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Site & Cell performance</div>
-                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Vendor comparison</div>
-                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>CSSR, Availability, TCH drops</div>
-                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Traffic trends & exports</div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-3">
+                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Single / multiple site analysis</div>
+                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Cells of a site, worst cells per region</div>
+                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Region / technology comparisons</div>
+                <div class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="w-1 h-1 rounded-full bg-indigo-400"></span>Trends, week-over-week, thresholds</div>
               </div>
-              <p class="text-xs text-slate-400 mt-3">Try a quick query from the sidebar, or type your question below.</p>
+              <p class="text-xs text-slate-400 mt-3">Start typing a site or cell name to see matches. Follow-ups like <em>"ab iske cells dikhao"</em> or <em>"same for 4G"</em> work too.</p>
             </div>
           </div>
         </div>
@@ -354,50 +298,43 @@
       </div>
     </div>
 
-    <!-- Input bar -->
     <div class="flex-shrink-0 px-3 md:px-6 pb-4 pt-2 max-w-5xl mx-auto w-full">
-      <!-- Suggested questions strip -->
-      <div class="flex gap-2 overflow-x-auto scroll pb-2 mb-2 no-scrollbar">
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="worst cells last 7 days">Worst cells 7d</button>
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="top 10 degraded sites yesterday">Top degraded sites</button>
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="vendor comparison">Vendor comparison</button>
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="traffic trend last 30 days">Traffic trend</button>
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="availability below 95%">Availability &lt;95%</button>
-        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass border-indigo-300/30 dark:border-indigo-700/30 text-slate-500 hover:text-indigo-500 hover:border-indigo-400/50 transition" data-q="best performing sites last 7 days">Best sites 7d</button>
+      <div class="flex gap-2 overflow-x-auto pb-2 mb-2 no-scrollbar">
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="worst cells last 7 days">Worst cells 7d</button>
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="top 10 degraded sites yesterday">Top degraded sites</button>
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="2G vs 3G vs 4G availability this month">2G vs 3G vs 4G</button>
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="traffic trend last 30 days">Traffic trend</button>
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="availability below 95% last 7 days">Availability &lt;95%</button>
+        <button class="inline-q flex-shrink-0 text-[11px] px-3 py-1 rounded-full glass text-slate-500 hover:text-indigo-500 transition" data-q="which KPIs are available">Which KPIs?</button>
       </div>
 
-      <div class="input-wrap glass rounded-2xl transition-all">
+      <div class="input-wrap glass rounded-2xl transition-all relative">
+        <div id="acBox" role="listbox" class="hidden absolute left-2 right-2 bottom-full mb-2 glass rounded-xl shadow-xl overflow-hidden z-30 max-h-64 overflow-y-auto scroll"></div>
         <div class="flex items-end gap-2 px-3 py-2.5">
           <div class="flex-1">
-            <textarea id="messageInput" rows="1"
-              placeholder="Ask about network KPIs... e.g. 'top 10 degraded sites yesterday' or '2026-03-22 get CSSR'"
+            <textarea id="messageInput" rows="1" autocomplete="off" aria-autocomplete="list" aria-controls="acBox"
+              placeholder="Ask about any site, cell, region or KPI... e.g. 'Zomba Dam aur Kasungu ka CSSR last 7 days'"
               class="w-full bg-transparent border-0 focus:ring-0 resize-none text-sm leading-relaxed py-1 max-h-32 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"></textarea>
           </div>
           <div class="flex items-center gap-1 flex-shrink-0">
-            <button id="stopBtn" class="hidden p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 transition">
+            <button id="stopBtn" class="hidden p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 transition" title="Stop">
               <i data-lucide="square" class="w-4 h-4"></i>
             </button>
-            <button id="sendBtn" class="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-500/30 transition active:scale-95">
+            <button id="sendBtn" class="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-500/30 transition active:scale-95" title="Send">
               <i data-lucide="send" class="w-4 h-4"></i>
             </button>
           </div>
         </div>
         <div class="px-4 pb-2 flex items-center gap-3">
           <span class="text-[10px] text-slate-400 flex items-center gap-1"><i data-lucide="database" class="w-3 h-3"></i>kpi_multi_vendor.c_dashboard_kpis</span>
-          <span class="text-[10px] text-slate-400 ml-auto">Enter to send · Shift+Enter for new line</span>
+          <span class="text-[10px] text-slate-400 ml-auto hidden sm:inline">Enter to send · Shift+Enter new line · Tab picks a name</span>
         </div>
       </div>
     </div>
   </main>
 </div>
 
-<!-- Toast -->
 <div id="toastContainer" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col gap-2"></div>
-
-<style>
-  .no-scrollbar::-webkit-scrollbar { display: none; }
-  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-</style>
 
 <script>
 (function(){
@@ -406,167 +343,269 @@
   // ── State ──
   let isStreaming = false;
   let abortCtrl = null;
+  let conversation = [];            // [{role, content, plan?}] sent back for follow-ups
+  const MAX_HISTORY = 10;
   const chatList   = document.getElementById('messageList');
   const emptyState = document.getElementById('emptyState');
   const input      = document.getElementById('messageInput');
   const sendBtn    = document.getElementById('sendBtn');
   const stopBtn    = document.getElementById('stopBtn');
 
+  // Validated categorical palette (fixed order; light / dark steps).
+  const PALETTE = {
+    light: ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#6250d6','#e34948'],
+    dark:  ['#3987e5','#d95926','#199e70','#c98500','#d55181','#0ca30c','#9085e9','#e66767'],
+  };
+  const BREACH = { cssr_bh:['<',95], cssr_daily:['<',95], data_sr_bh:['<',95], data_sr_daily:['<',95],
+                   tch_availability_daily:['<',99], drop_rate_bh:['>',2], drop_rate_daily:['>',2] };
+
   // ── Helpers ──
+  function isDark() { return document.documentElement.classList.contains('dark'); }
   function updateEmptyState() {
     emptyState.classList.toggle('hidden', chatList.querySelectorAll('[data-role="user"]').length > 0);
   }
-
   function showToast(msg, type='info') {
     const t = document.createElement('div');
-    t.className = `pointer-events-auto px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium backdrop-blur-md
-      ${type==='error' ? 'bg-rose-600/95 text-white' : type==='success' ? 'bg-emerald-600/95 text-white' : 'bg-slate-900/95 text-white dark:bg-slate-800/95'}`;
+    t.className = `pointer-events-auto px-4 py-2.5 rounded-xl shadow-xl text-xs font-medium backdrop-blur-md ${type==='error' ? 'bg-rose-600/95 text-white' : type==='success' ? 'bg-emerald-600/95 text-white' : 'bg-slate-900/95 text-white'}`;
     t.textContent = msg;
     document.getElementById('toastContainer').appendChild(t);
     setTimeout(()=>{ t.style.transition='opacity .2s'; t.style.opacity='0'; setTimeout(()=>t.remove(),200); }, 2800);
   }
-
-  function escapeHtml(s) {
-    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
-  }
-
+  function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
   function renderMarkdown(text) {
-    const html = marked.parse(text);
+    const html = DOMPurify.sanitize(marked.parse(text || ''));
     const div = document.createElement('div'); div.innerHTML = html;
-    div.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+    div.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch(e) {} });
     return div.innerHTML;
   }
-
-  // Auto-resize textarea
   input.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 128) + 'px';
   });
-
   function scrollBottom() {
     const el = document.getElementById('chatContainer');
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }
+  function fmtValue(v, col) {
+    if (v == null || v === '') return '—';
+    if (typeof v !== 'number') return String(v);
+    const unit = col && col.unit;
+    if (unit === '%') return v.toFixed(2);
+    if (Number.isInteger(v)) return v.toLocaleString();
+    return Math.abs(v) >= 1000 ? v.toLocaleString(undefined, {maximumFractionDigits: 0}) : v.toFixed(2);
+  }
 
-  // ── Charts ──
-  const _charts = {};
-  let _chartSeq = 0;
-
-  function renderDataTable(rows) {
-    if (!rows || rows.length === 0) return null;
+  // ── Table ──
+  function renderDataTable(td) {
+    const rows = td.rows || [];
+    if (!rows.length) return null;
     const HIDE = new Set(['latitude','longitude','did']);
+    const colMeta = {};
+    (td.columns || []).forEach(c => colMeta[c.key] = c);
     const cols = Object.keys(rows[0]).filter(k => !HIDE.has(k));
     const wrap = document.createElement('div');
-    wrap.className = 'mt-3 overflow-x-auto rounded-xl border border-indigo-500/10 bg-slate-900/20';
+    wrap.className = 'mt-3 rounded-xl border border-indigo-500/10 bg-slate-900/5 dark:bg-slate-900/20';
+    const scroller = document.createElement('div');
+    scroller.className = 'overflow-auto scroll max-h-96 rounded-xl';
     const tbl = document.createElement('table');
-    tbl.className = 'w-full text-xs border-collapse';
-    tbl.innerHTML = `<thead><tr class="bg-indigo-600/10">
-      ${cols.map(c=>`<th class="px-3 py-2 text-left font-semibold text-indigo-400 whitespace-nowrap border-b border-indigo-500/10 kpi-tag">${c}</th>`).join('')}
-    </tr></thead>`;
+    tbl.className = 'data-table w-full text-xs border-collapse';
+    tbl.innerHTML = `<thead><tr>${cols.map(c => {
+      const m = colMeta[c] || {};
+      const unit = m.unit && m.unit !== '%' && m.metric ? ` <span class="opacity-60">(${escapeHtml(m.unit)})</span>` : '';
+      return `<th class="px-3 py-2 text-left font-semibold text-indigo-500 dark:text-indigo-300 whitespace-nowrap border-b border-indigo-500/10 bg-slate-100 dark:bg-slate-900" title="${escapeHtml(c)}">${escapeHtml(m.label || c)}${unit}</th>`;
+    }).join('')}</tr></thead>`;
     const tbody = document.createElement('tbody');
-    rows.slice(0,50).forEach((row,i)=>{
-      const tr = document.createElement('tr');
-      tr.className = (i%2===0 ? 'bg-transparent' : 'bg-white/2 dark:bg-white/[0.02]') + ' hover:bg-indigo-500/5 transition-colors';
-      tr.innerHTML = cols.map(c=>{
-        const v = row[c];
-        const isNum = typeof v === 'number';
-        const disp = (isNum && !Number.isInteger(v)) ? v.toFixed(2) : (v==null ? '—' : v);
-        const numClass = isNum ? 'text-right font-mono text-slate-300' : 'text-slate-400';
-        return `<td class="px-3 py-1.5 border-b border-white/[0.04] max-w-[160px] truncate ${numClass}">${escapeHtml(String(disp))}</td>`;
-      }).join('');
-      tbody.appendChild(tr);
-    });
-    tbl.appendChild(tbody);
-    wrap.appendChild(tbl);
-    if (rows.length > 50) {
-      const note = document.createElement('p');
-      note.className = 'text-center text-[10px] text-slate-500 py-2';
-      note.textContent = `Showing 50 of ${rows.length} rows`;
-      wrap.appendChild(note);
+    const LIMIT = 100;
+    function fill(n) {
+      tbody.innerHTML = '';
+      rows.slice(0, n).forEach((row, i) => {
+        const tr = document.createElement('tr');
+        tr.className = (i % 2 ? 'bg-slate-500/[0.03]' : '') + ' hover:bg-indigo-500/5 transition-colors';
+        tr.innerHTML = cols.map(c => {
+          const v = row[c]; const m = colMeta[c] || {};
+          const isNum = typeof v === 'number';
+          let cls = isNum ? 'text-right font-mono text-slate-700 dark:text-slate-300' : 'text-slate-600 dark:text-slate-400';
+          let prefix = '';
+          if (isNum && m.kind === 'change' && m.better) {
+            const good = (m.better === 'higher') ? v > 0 : v < 0;
+            if (v !== 0) { prefix = v > 0 ? '▲ ' : '▼ '; cls += good ? ' !text-emerald-600 dark:!text-emerald-400' : ' !text-rose-600 dark:!text-rose-400'; }
+          } else if (isNum && BREACH[c]) {
+            const [op, lim] = BREACH[c];
+            if ((op === '<' && v < lim) || (op === '>' && v > lim)) { cls += ' !text-rose-600 dark:!text-rose-400'; prefix = '⚠ '; }
+          }
+          return `<td class="px-3 py-1.5 border-b border-slate-500/10 max-w-[220px] truncate ${cls}" title="${escapeHtml(v == null ? '' : v)}">${prefix}${escapeHtml(fmtValue(v, m))}</td>`;
+        }).join('');
+        tbody.appendChild(tr);
+      });
     }
+    fill(LIMIT);
+    tbl.appendChild(tbody);
+    scroller.appendChild(tbl);
+    wrap.appendChild(scroller);
+    const foot = document.createElement('div');
+    foot.className = 'flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-500 border-t border-indigo-500/10';
+    const shown = Math.min(rows.length, LIMIT);
+    foot.innerHTML = `<span>${shown < rows.length ? `Showing ${shown} of ${rows.length} rows` : `${rows.length} rows`}${td.truncated ? ' (result truncated — export CSV for all)' : ''}</span>`;
+    if (rows.length > LIMIT) {
+      const more = document.createElement('button');
+      more.className = 'text-indigo-500 hover:underline';
+      more.textContent = `Show all ${rows.length}`;
+      more.onclick = () => { fill(rows.length); foot.firstChild.textContent = `${rows.length} rows`; more.remove(); };
+      foot.appendChild(more);
+    }
+    wrap.appendChild(foot);
     return wrap;
   }
 
-  function renderChart(chartData) {
-    if (!chartData || !chartData.labels || !chartData.labels.length) return null;
-    const uid = ++_chartSeq;
-
+  // ── Charts ──
+  const _charts = [];
+  function chartConfig(cd) {
+    const pal = isDark() ? PALETTE.dark : PALETTE.light;
+    const css = getComputedStyle(document.documentElement);
+    const text = css.getPropertyValue('--chart-text').trim() || '#94a3b8';
+    const grid = css.getPropertyValue('--chart-grid').trim() || 'rgba(148,163,184,0.15)';
+    const surface = css.getPropertyValue('--chart-surface').trim() || '#1a1a19';
+    const type = cd.type === 'line' ? 'line' : cd.type === 'pie' ? 'doughnut' : 'bar';
+    const unit = cd.unit || '';
+    const datasets = (cd.datasets || []).map((d, i) => {
+      const color = pal[(d.slot ?? i) % pal.length];
+      if (type === 'doughnut') {
+        return { label: d.label, data: d.data, backgroundColor: cd.labels.map((_, j) => pal[j % pal.length]),
+                 borderColor: surface, borderWidth: 2 };
+      }
+      return type === 'line'
+        ? { label: d.label, data: d.data, borderColor: color, backgroundColor: color, borderWidth: 2,
+            pointRadius: cd.labels.length > 20 ? 0 : 3, pointHoverRadius: 5, tension: 0.25, spanGaps: true, fill: false }
+        : { label: d.label, data: d.data, backgroundColor: color, borderColor: surface, borderWidth: 1,
+            borderRadius: 4, borderSkipped: 'start', maxBarThickness: 28 };
+    });
+    const showLegend = type === 'doughnut' || datasets.length > 1;
+    const fmt = v => v == null ? '—' : (unit === '%' ? Number(v).toFixed(2) + '%' : Number(v).toLocaleString(undefined, {maximumFractionDigits: 2}) + (unit && unit !== 'count' ? ' ' + unit : ''));
+    return {
+      type,
+      data: { labels: cd.labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: type === 'doughnut' ? {} : { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: showLegend, position: 'top', labels: { color: text, font: { size: 10 }, boxWidth: 10, usePointStyle: true } },
+          title: { display: !!cd.title, text: cd.title, color: text, font: { size: 11, weight: '600' }, align: 'start' },
+          tooltip: { backgroundColor: 'rgba(10,15,40,0.95)', titleColor: '#e2e8f0', bodyColor: '#cbd5e1', borderColor: 'rgba(99,102,241,0.3)', borderWidth: 1,
+                     callbacks: { label: ctx => `${ctx.dataset.label}: ${fmt(type === 'doughnut' ? ctx.parsed : ctx.parsed.y)}` } },
+        },
+        scales: type === 'doughnut' ? {} : {
+          x: { ticks: { color: text, font: { size: 9 }, maxTicksLimit: 14, maxRotation: 40, autoSkip: true }, grid: { display: false } },
+          y: { ticks: { color: text, font: { size: 9 }, callback: v => unit === '%' ? v + '%' : Number(v).toLocaleString() },
+               grid: { color: grid }, title: { display: !!unit && unit !== '%', text: unit, color: text, font: { size: 9 } },
+               beginAtZero: unit !== '%' },
+        },
+      },
+    };
+  }
+  function renderChart(cd) {
+    if (!cd || !cd.labels || !cd.labels.length || !cd.datasets || !cd.datasets.length) return null;
     const outer = document.createElement('div');
-    outer.className = 'mt-3 rounded-xl border border-indigo-500/10 p-4 bg-slate-900/30';
-
-    /* Chart.js needs a position:relative parent with an explicit height
-       to be stable — never let it compute height from a flexible container */
+    outer.className = 'mt-3 rounded-xl border border-indigo-500/10 p-4 bg-slate-900/5 dark:bg-slate-900/30';
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:relative; width:100%; height:280px;';
     outer.appendChild(wrap);
-
     const canvas = document.createElement('canvas');
-    canvas.id = 'chart-' + uid;
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', cd.title || 'KPI chart');
     wrap.appendChild(canvas);
-
-    setTimeout(()=>{
-      if (_charts[uid]) _charts[uid].destroy();
-      const type = chartData.type === 'line' ? 'line' : chartData.type === 'pie' ? 'pie' : 'bar';
-      _charts[uid] = new Chart(canvas.getContext('2d'), {
-        type,
-        data: { labels: chartData.labels, datasets: chartData.datasets },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,   /* height is controlled by the wrapper div */
-          plugins: {
-            legend: { position:'top', labels:{ color:'#94a3b8', font:{size:10, family:'JetBrains Mono'}, boxWidth:10 } },
-            tooltip: { mode:'index', intersect:false, backgroundColor:'rgba(10,15,40,0.95)', titleColor:'#c7d2fe', bodyColor:'#94a3b8', borderColor:'rgba(99,102,241,0.3)', borderWidth:1 },
-          },
-          scales: type !== 'pie' ? {
-            x: { ticks:{ color:'#64748b', font:{size:9, family:'JetBrains Mono'}, maxTicksLimit:12, maxRotation:40 }, grid:{ color:'rgba(255,255,255,0.03)' } },
-            y: { ticks:{ color:'#64748b', font:{size:9} }, grid:{ color:'rgba(255,255,255,0.03)' } },
-          } : {},
-        }
-      });
-    }, 60);
+    if (cd.note) {
+      const n = document.createElement('p'); n.className = 'text-[10px] text-slate-500 mt-2'; n.textContent = cd.note; outer.appendChild(n);
+    }
+    setTimeout(() => {
+      try { _charts.push({ chart: new Chart(canvas.getContext('2d'), chartConfig(cd)), canvas, cd }); } catch (e) { console.error(e); }
+    }, 30);
     return outer;
   }
-
-  function renderTelecomData(td, contentDiv, question) {
-    const tableEl = renderDataTable(td.rows);
-    if (tableEl) contentDiv.appendChild(tableEl);
-    const chartEl = renderChart(td.chart_data);
-    if (chartEl) contentDiv.appendChild(chartEl);
-
-    // Footer
-    const footer = document.createElement('div');
-    footer.className = 'mt-3 pt-3 border-t border-white/[0.06] flex flex-wrap items-center gap-2';
-
-    // Stats badges
-    const stats = [
-      { label: td.row_count + ' rows', color: 'indigo' },
-      { label: td.metrics.query_execution_ms + 'ms', color: 'emerald' },
-      { label: td.intent, color: 'purple' },
-    ];
-    stats.forEach(s => {
-      const b = document.createElement('span');
-      b.className = `text-[10px] font-medium px-2 py-0.5 rounded-full bg-${s.color}-500/10 text-${s.color}-400 border border-${s.color}-500/20 kpi-tag`;
-      b.textContent = s.label;
-      footer.appendChild(b);
+  function recolorCharts() {
+    _charts.forEach(entry => {
+      if (!document.body.contains(entry.canvas)) return;
+      try { entry.chart.destroy(); entry.chart = new Chart(entry.canvas.getContext('2d'), chartConfig(entry.cd)); } catch (e) {}
     });
+  }
 
-    // Export CSV
-    const expBtn = document.createElement('button');
-    expBtn.className = 'flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 px-2.5 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/10 transition ml-auto';
-    expBtn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV`;
-    expBtn.onclick = () => { window.open('/api/export/csv?question=' + encodeURIComponent(question)); showToast('Downloading CSV...', 'success'); };
-    footer.appendChild(expBtn);
-    contentDiv.appendChild(footer);
+  function chip(text, onClick, tone='indigo') {
+    const b = document.createElement('button');
+    b.className = `text-[11px] px-2.5 py-1 rounded-full border transition ${tone === 'amber'
+      ? 'border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
+      : 'border-indigo-500/25 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/10'}`;
+    b.textContent = text;
+    b.onclick = onClick;
+    return b;
+  }
 
-    // SQL collapsible
+  function renderTelecomData(td, dataDiv) {
+    // context line: period + filter chips + notes
+    const ctx = document.createElement('div');
+    ctx.className = 'flex flex-wrap items-center gap-1.5 text-[10px]';
+    if (td.data_source) ctx.insertAdjacentHTML('beforeend', `<span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 kpi-tag" title="Data source">🗂 ${escapeHtml(td.data_source)}</span>`);
+    if (td.period) ctx.insertAdjacentHTML('beforeend', `<span class="px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-600 dark:text-slate-300 kpi-tag">📅 ${escapeHtml(td.period)}</span>`);
+    Object.entries(td.filters || {}).forEach(([k, vals]) => {
+      const list = (vals || []).slice(0, 4).join(', ') + ((vals || []).length > 4 ? ` +${vals.length - 4}` : '');
+      ctx.insertAdjacentHTML('beforeend', `<span class="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 kpi-tag">${escapeHtml(k)}: ${escapeHtml(list)}</span>`);
+    });
+    dataDiv.appendChild(ctx);
+    if (td.notes && td.notes.length) {
+      const n = document.createElement('div');
+      n.className = 'mt-2 text-[11px] text-amber-700 dark:text-amber-300/90 bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2 space-y-0.5';
+      n.innerHTML = td.notes.map(x => `<p>ℹ️ ${renderMarkdown(x).replace(/^<p>|<\/p>\s*$/g, '')}</p>`).join('');
+      dataDiv.appendChild(n);
+    }
+    const chartEl = renderChart(td.chart_data);
+    if (chartEl) dataDiv.appendChild(chartEl);
+    const tableEl = renderDataTable(td);
+    if (tableEl) dataDiv.appendChild(tableEl);
+    if (!td.rows || !td.rows.length) {
+      dataDiv.insertAdjacentHTML('beforeend', `<p class="mt-3 text-xs text-slate-500">No rows matched this question.</p>`);
+    }
+
+    const footer = document.createElement('div');
+    footer.className = 'mt-3 pt-3 border-t border-slate-500/10 flex flex-wrap items-center gap-2';
+    [{ label: td.row_count + ' rows', color: 'indigo' }, { label: td.metrics.query_execution_ms + 'ms', color: 'emerald' },
+     { label: td.intent, color: 'purple' }, { label: td.source === 'claude' || td.source === 'claude-sql' ? 'AI plan' : 'rule plan', color: 'slate' }]
+      .forEach(s => {
+        const b = document.createElement('span');
+        b.className = `text-[10px] font-medium px-2 py-0.5 rounded-full bg-${s.color}-500/10 text-${s.color}-500 dark:text-${s.color}-400 border border-${s.color}-500/20 kpi-tag`;
+        b.textContent = s.label; footer.appendChild(b);
+      });
+    if (td.rows && td.rows.length) {
+      const expBtn = document.createElement('button');
+      expBtn.className = 'flex items-center gap-1 text-[11px] text-indigo-500 dark:text-indigo-400 hover:text-indigo-400 px-2.5 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/10 transition ml-auto';
+      expBtn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV`;
+      expBtn.onclick = () => {
+        const url = td.result_id ? '/api/export/csv?id=' + encodeURIComponent(td.result_id) + '&question=' + encodeURIComponent(td.question)
+                                 : '/api/export/csv?question=' + encodeURIComponent(td.question);
+        window.open(url); showToast('Downloading CSV...', 'success');
+      };
+      footer.appendChild(expBtn);
+    }
+    dataDiv.appendChild(footer);
+
     const details = document.createElement('details');
     details.className = 'mt-2';
     details.innerHTML = `<summary class="text-[10px] text-slate-500 hover:text-indigo-400 cursor-pointer select-none transition kpi-tag">VIEW GENERATED SQL</summary>
-      <pre class="mt-1.5 px-3 py-2.5 rounded-xl bg-slate-900/80 text-emerald-400 overflow-x-auto text-[11px] leading-relaxed border border-emerald-500/10 font-mono">${escapeHtml(td.sql)}</pre>`;
-    contentDiv.appendChild(details);
+      <pre class="mt-1.5 px-3 py-2.5 rounded-xl bg-slate-900/90 text-emerald-400 overflow-x-auto text-[11px] leading-relaxed border border-emerald-500/10 font-mono whitespace-pre">${escapeHtml(td.sql)}</pre>`;
+    dataDiv.appendChild(details);
   }
 
-  // ── Add user message ──
+  function renderChips(container, items, label, tone) {
+    if (!items || !items.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'mt-3 flex flex-wrap items-center gap-1.5';
+    wrap.insertAdjacentHTML('beforeend', `<span class="text-[10px] text-slate-400 mr-1">${escapeHtml(label)}</span>`);
+    items.forEach(it => {
+      const text = typeof it === 'string' ? it : (it.label || it.question);
+      const q = typeof it === 'string' ? it : (it.question || it.label);
+      wrap.appendChild(chip(text, () => sendMessage(q), tone));
+    });
+    container.appendChild(wrap);
+  }
+
+  // ── Messages ──
   function addUserMsg(content) {
     const div = document.createElement('div');
     div.className = 'msg-in flex justify-end';
@@ -583,7 +622,6 @@
     scrollBottom();
   }
 
-  // ── Create AI response bubble ──
   function createAssistantBubble() {
     const div = document.createElement('div');
     div.className = 'msg-in flex gap-3';
@@ -592,15 +630,17 @@
       <div class="flex-shrink-0 w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-500/30">
         <i data-lucide="bot" class="w-4 h-4 text-white"></i>
       </div>
-      <div class="flex-1 max-w-[88%]">
+      <div class="flex-1 min-w-0 max-w-[92%]">
         <div class="glass rounded-2xl rounded-tl-sm px-4 py-3.5 shadow-sm">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-[10px] font-semibold text-indigo-400 kpi-tag">YOGI · DataYog</span>
           </div>
-          <div class="response-content prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-slate-200"></div>
+          <div class="response-content prose prose-sm dark:prose-invert max-w-none text-sm text-slate-700 dark:text-slate-200"></div>
+          <div class="data-content"></div>
+          <div class="chips-content"></div>
           <div class="typing-indicator flex items-center gap-1.5 mt-2">
             <div class="dot"></div><div class="dot"></div><div class="dot"></div>
-            <span class="text-[10px] text-indigo-400 ml-1">Analyzing network data...</span>
+            <span class="status-text text-[10px] text-indigo-400 ml-1">Analyzing network data...</span>
           </div>
           <div class="error-area hidden mt-2 pt-2 border-t border-rose-500/20">
             <button class="retry-btn text-xs text-rose-400 flex items-center gap-1 hover:text-rose-300 transition">
@@ -614,74 +654,72 @@
     scrollBottom();
     return {
       contentDiv: div.querySelector('.response-content'),
+      dataDiv:    div.querySelector('.data-content'),
+      chipsDiv:   div.querySelector('.chips-content'),
       indicator:  div.querySelector('.typing-indicator'),
+      statusText: div.querySelector('.status-text'),
       errorArea:  div.querySelector('.error-area'),
       container:  div,
     };
   }
 
-  // ── Send message ──
   async function sendMessage(message) {
-    if (!message.trim() || isStreaming) return;
+    message = (message || '').trim();
+    if (!message || isStreaming) return;
+    hideAc();
     addUserMsg(message);
     input.value = ''; input.style.height = 'auto';
-
-    const { contentDiv, indicator, errorArea, container } = createAssistantBubble();
+    const ui = createAssistantBubble();
     let accumulated = '';
+    let telecom = null, suggestions = [];
     isStreaming = true;
     sendBtn.classList.add('hidden');
     stopBtn.classList.remove('hidden');
-
+    const history = conversation.slice(-MAX_HISTORY);
     try {
       abortCtrl = new AbortController();
       const res = await fetch('/chat/stream', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ prompt: message }),
+        body: JSON.stringify({ prompt: message, history, events: 'v2' }),
         signal: abortCtrl.signal,
       });
       if (!res.ok) throw new Error('API error ' + res.status);
-
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
+      let buffer = '', finished = false;
+      while (!finished) {
         const { done, value } = await reader.read();
         if (done) break;
-        // Keep the last partial line in the buffer: a network chunk can end mid-event.
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop();
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
-          if (data === '[DONE]') { indicator.remove(); break; }
-          try {
-            const j = JSON.parse(data);
-            if (j.chunk) {
-              accumulated += j.chunk;
-              contentDiv.innerHTML = renderMarkdown(accumulated);
-            }
-            if (j.telecom_data) {
-              indicator.remove();
-              renderTelecomData(j.telecom_data, contentDiv, message);
-            }
-            if (j.error) {
-              indicator.remove();
-              contentDiv.innerHTML += `<p class="text-rose-400 text-xs mt-2">${escapeHtml(j.error)}</p>`;
-            }
-          } catch(e) {}
+          if (data === '[DONE]') { finished = true; break; }
+          let j; try { j = JSON.parse(data); } catch (e) { continue; }
+          if (j.status) ui.statusText.textContent = j.status;
+          if (j.chunk) { accumulated += j.chunk; ui.contentDiv.innerHTML = renderMarkdown(accumulated); }
+          if (j.telecom_data) { telecom = j.telecom_data; renderTelecomData(telecom, ui.dataDiv); }
+          if (j.suggestions) suggestions = j.suggestions;
+          if (j.error) { ui.contentDiv.insertAdjacentHTML('beforeend', `<p class="text-rose-400 text-xs mt-2">${escapeHtml(j.error)}</p>`); }
         }
         scrollBottom();
       }
-      indicator.remove();
+      ui.indicator.remove();
+      if (suggestions.length) renderChips(ui.chipsDiv, suggestions, 'Did you mean:', 'amber');
+      if (telecom && telecom.followups) renderChips(ui.chipsDiv, telecom.followups, 'Next:', 'indigo');
+      conversation.push({ role: 'user', content: message });
+      conversation.push({ role: 'assistant', content: accumulated.slice(0, 1500) || (telecom ? telecom.title : ''), plan: telecom ? telecom.plan : null });
+      conversation = conversation.slice(-MAX_HISTORY * 2);
       loadHistory();
-    } catch(e) {
-      indicator.remove();
+    } catch (e) {
+      ui.indicator.remove();
       if (e.name !== 'AbortError') {
-        errorArea.classList.remove('hidden');
-        contentDiv.innerHTML += `<p class="text-rose-400 text-xs mt-2">Connection issue — please retry.</p>`;
-        errorArea.querySelector('.retry-btn').onclick = () => { container.remove(); sendMessage(message); };
+        ui.errorArea.classList.remove('hidden');
+        ui.contentDiv.insertAdjacentHTML('beforeend', `<p class="text-rose-400 text-xs mt-2">Connection issue — please retry.</p>`);
+        ui.errorArea.querySelector('.retry-btn').onclick = () => { ui.container.remove(); sendMessage(message); };
         showToast('Stream interrupted', 'error');
       }
     } finally {
@@ -689,25 +727,74 @@
       sendBtn.classList.remove('hidden');
       stopBtn.classList.add('hidden');
       abortCtrl = null;
+      scrollBottom();
     }
   }
+
+  // ── Autocomplete for site / cell / region names ──
+  const acBox = document.getElementById('acBox');
+  let acItems = [], acIndex = -1, acTimer = null, acToken = null;
+  function hideAc() { acBox.classList.add('hidden'); acItems = []; acIndex = -1; }
+  function currentToken() {
+    const pos = input.selectionStart;
+    const before = input.value.slice(0, pos);
+    const m = before.match(/([A-Za-z0-9_\-]{3,})$/);
+    return m ? { text: m[1], start: pos - m[1].length, end: pos } : null;
+  }
+  function renderAc() {
+    if (!acItems.length) { hideAc(); return; }
+    acBox.innerHTML = acItems.map((it, i) => `<div class="ac-item px-3 py-2 cursor-pointer flex items-center gap-2 text-xs" role="option" aria-selected="${i === acIndex}" data-i="${i}">
+      <span class="font-mono text-slate-800 dark:text-slate-100 truncate">${escapeHtml(it.label)}</span>
+      <span class="ml-auto text-[10px] text-slate-400 flex-shrink-0">${escapeHtml(it.detail || it.kind)}</span></div>`).join('');
+    acBox.classList.remove('hidden');
+    acBox.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', ev => { ev.preventDefault(); pickAc(+el.dataset.i); }));
+  }
+  function pickAc(i) {
+    const it = acItems[i]; if (!it || !acToken) return;
+    const v = input.value;
+    input.value = v.slice(0, acToken.start) + it.label + ' ' + v.slice(acToken.end);
+    const caret = acToken.start + it.label.length + 1;
+    input.setSelectionRange(caret, caret);
+    hideAc(); input.focus();
+  }
+  input.addEventListener('input', () => {
+    clearTimeout(acTimer);
+    const tok = currentToken();
+    if (!tok) { hideAc(); return; }
+    acTimer = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/suggest?q=' + encodeURIComponent(tok.text));
+        const items = await r.json();
+        const now = currentToken();
+        if (!now || now.text !== tok.text) return;
+        acToken = now; acItems = (items || []).slice(0, 8); acIndex = -1; renderAc();
+      } catch (e) { hideAc(); }
+    }, 180);
+  });
+  input.addEventListener('blur', () => setTimeout(hideAc, 120));
 
   // ── Event listeners ──
   sendBtn.addEventListener('click', () => sendMessage(input.value));
   stopBtn.addEventListener('click', () => { if (abortCtrl) abortCtrl.abort(); });
   input.addEventListener('keydown', e => {
+    const acOpen = !acBox.classList.contains('hidden') && acItems.length;
+    if (acOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      acIndex = (acIndex + (e.key === 'ArrowDown' ? 1 : -1) + acItems.length) % acItems.length;
+      renderAc(); return;
+    }
+    if (acOpen && (e.key === 'Tab' || (e.key === 'Enter' && acIndex >= 0))) { e.preventDefault(); pickAc(acIndex >= 0 ? acIndex : 0); return; }
+    if (acOpen && e.key === 'Escape') { hideAc(); return; }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input.value); }
   });
+  document.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
+    sendMessage(b.getAttribute('data-q'));
+    if (window.innerWidth < 768) closeSidebar();
+  }));
 
-  // Quick queries (sidebar + chips + cards)
-  document.querySelectorAll('[data-q]').forEach(b => {
-    b.addEventListener('click', () => sendMessage(b.getAttribute('data-q')));
-  });
-
-  // New chat
   function clearChat() {
-    chatList.querySelectorAll('[data-role="user"]').forEach(m => m.remove());
-    chatList.querySelectorAll('[data-role="assistant"]:not(:first-of-type)').forEach(m => m.remove());
+    chatList.querySelectorAll('[data-role="user"], [data-role="assistant"]').forEach(m => m.remove());
+    conversation = [];
     updateEmptyState();
     showToast('New conversation started', 'success');
   }
@@ -717,56 +804,71 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); clearChat(); }
   });
 
-  // Sidebar toggle
-  const sidebar   = document.getElementById('sidebar');
-  const backdrop  = document.getElementById('backdrop');
-  const menuToggle = document.getElementById('menuToggle');
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('backdrop');
   function openSidebar()  { sidebar.style.transform = 'translateX(0)'; backdrop.classList.remove('hidden'); }
   function closeSidebar() { sidebar.style.transform = ''; backdrop.classList.add('hidden'); }
-  menuToggle.addEventListener('click', openSidebar);
+  document.getElementById('menuToggle').addEventListener('click', openSidebar);
   backdrop.addEventListener('click', closeSidebar);
 
-  // Theme
   function applyTheme() {
-    const dark = localStorage.getItem('theme') !== 'light';
-    document.documentElement.classList.toggle('dark', dark);
+    let stored = null;
+    try { stored = localStorage.getItem('theme'); } catch (e) {}
+    document.documentElement.classList.toggle('dark', stored !== 'light');
   }
   applyTheme();
   [document.getElementById('themeBtn'), document.getElementById('themeToggleHeader')].forEach(btn => {
-    btn?.addEventListener('click', () => {
+    btn && btn.addEventListener('click', () => {
       const nowDark = document.documentElement.classList.toggle('dark');
-      localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+      try { localStorage.setItem('theme', nowDark ? 'dark' : 'light'); } catch (e) {}
+      recolorCharts();
     });
   });
 
-  // ── Health check ──
+  // ── Health + catalog ──
   async function checkHealth() {
     try {
       const r = await fetch('/health');
       const d = await r.json();
       const online = d.llm === 'connected';
       const dbOnline = d.db === 'connected';
-      // Sidebar
       if (d.model) document.getElementById('aiLabel').textContent = 'Claude / ' + d.model;
-      document.getElementById('aiDot').className  = `w-1.5 h-1.5 rounded-full ${online ? 'bg-emerald-500 online' : 'bg-rose-500'}`;
+      document.getElementById('aiDot').className = `w-1.5 h-1.5 rounded-full ${online ? 'bg-emerald-500 online' : 'bg-rose-500'}`;
       document.getElementById('aiStatus').textContent = online ? 'connected' : 'offline';
       document.getElementById('aiStatus').title = d.message || '';
-      document.getElementById('dbDot').className   = `w-1.5 h-1.5 rounded-full ${dbOnline ? 'bg-emerald-500 online' : 'bg-rose-500'}`;
+      document.getElementById('dbDot').className = `w-1.5 h-1.5 rounded-full ${dbOnline ? 'bg-emerald-500 online' : 'bg-rose-500'}`;
       document.getElementById('dbStatus').textContent = dbOnline ? 'connected' : 'offline';
-      // Header badge
       const badge = document.getElementById('headerDbBadge');
-      const dot   = document.getElementById('headerDbDot');
-      const lbl   = document.getElementById('headerDbLabel');
       badge.classList.remove('hidden');
-      dot.className = `w-1.5 h-1.5 rounded-full ${online && dbOnline ? 'bg-emerald-400' : 'bg-amber-400'}`;
-      lbl.textContent = online && dbOnline ? 'DB + AI' : (dbOnline ? 'DB only' : (online ? 'AI only' : 'Offline'));
-    } catch(e) {
+      document.getElementById('headerDbDot').className = `w-1.5 h-1.5 rounded-full ${online && dbOnline ? 'bg-emerald-400' : 'bg-amber-400'}`;
+      document.getElementById('headerDbLabel').textContent = online && dbOnline ? 'DB + AI' : (dbOnline ? 'DB only' : (online ? 'AI only' : 'Offline'));
+      if (d.data_range) {
+        document.getElementById('dataRangeLabel').textContent = 'Data: ' + d.data_range.replace(' to ', ' → ');
+        document.getElementById('dataRangeBadge').classList.remove('hidden');
+        document.getElementById('dataRangeBadge').classList.add('md:flex');
+      }
+    } catch (e) {
       document.getElementById('aiDot').className = 'w-1.5 h-1.5 rounded-full bg-rose-500';
       document.getElementById('aiStatus').textContent = 'unreachable';
     }
   }
-
-  // ── Load query history ──
+  async function loadCatalog() {
+    try {
+      const r = await fetch('/api/catalog');
+      if (!r.ok) return;
+      const c = await r.json();
+      const site = (c.example_sites || [])[0];
+      if (site) {
+        ['qSite', 'cardSite'].forEach(id => document.getElementById(id).setAttribute('data-q', `${site} site analysis last 7 days`));
+        document.getElementById('cardSiteText').textContent = `Daily KPIs for ${site}`;
+      }
+      const regions = c.regions || [];
+      if (regions.length >= 2) {
+        const q = `compare ${regions[0]} vs ${regions[1]} CSSR and availability last 7 days`;
+        ['qRegions', 'cardRegions'].forEach(id => document.getElementById(id).setAttribute('data-q', q));
+      }
+    } catch (e) {}
+  }
   async function loadHistory() {
     try {
       const r = await fetch('/api/query-history');
@@ -774,21 +876,27 @@
       const el = document.getElementById('historyList');
       if (!data.length) { el.innerHTML = '<p class="text-[10px] text-slate-500 px-2 py-1">No queries yet</p>'; return; }
       el.innerHTML = '';
-      data.slice(0, 12).forEach(item => {
+      const seen = new Set();
+      data.filter(item => !seen.has(item.question) && seen.add(item.question)).slice(0, 12).forEach(item => {
         const btn = document.createElement('button');
-        btn.className = 'quick-q w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-indigo-500/10 text-slate-500 hover:text-indigo-400 transition text-[11px] group';
+        btn.className = 'w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-indigo-500/10 text-slate-500 hover:text-indigo-400 transition text-[11px]';
         btn.innerHTML = `<i data-lucide="clock" class="w-3 h-3 flex-shrink-0 opacity-50"></i><span class="truncate">${escapeHtml(item.question)}</span><span class="ml-auto flex-shrink-0 text-[9px] opacity-40">${item.row_count}r</span>`;
         btn.addEventListener('click', () => sendMessage(item.question));
         el.appendChild(btn);
       });
       lucide.createIcons();
-    } catch(e) {}
+    } catch (e) {}
   }
 
-  // Init
   checkHealth();
+  loadCatalog();
   loadHistory();
   updateEmptyState();
+  // Shareable links: /?q=worst+cells+in+Lilongwe asks the question on load
+  try {
+    const q = new URLSearchParams(location.search).get('q');
+    if (q) sendMessage(q.slice(0, 2000));
+  } catch (e) {}
   setInterval(checkHealth, 30000);
 })();
 </script>

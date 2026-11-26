@@ -2,22 +2,18 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import json
-import mimetypes
-import re
-import sqlite3
+from contextlib import asynccontextmanager
+import asyncio
 import csv
 import io
-import time
-from datetime import date, datetime
-from decimal import Decimal
+import json
+import logging
+import mimetypes
+import os
+import re
+import sqlite3
+import threading
 from typing import AsyncGenerator
-from sqlalchemy import bindparam, text
-try:
-    import pandas as pd
-except ModuleNotFoundError:
-    pd = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BASE_DIR)
@@ -39,14 +35,38 @@ def load_local_env():
 
 
 load_local_env()
-try:
-    from database import engine
-    import llm
-except ModuleNotFoundError:
-    from app.database import engine
-    from app import llm
+from app.database import engine  # noqa: E402
+from app import analysis, llm  # noqa: E402
+from app.analysis import AnalysisMessage, NotDataQuestion  # noqa: E402
+from app.catalog import _catalog_ready, get_catalog, norm  # noqa: E402
+from app.kpis import KPI_DICTIONARY, METRICS, SOURCES, TELECOM_KB  # noqa: E402
+from app.planner import Plan, _find_metrics  # noqa: E402
+from app.sqlguard import execute_readonly, friendly_db_error, json_safe, validate_sql  # noqa: E402,F401
 
-app = FastAPI(title="Yogi by DataYog — Telecom KPI Analytics API")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("yogi")
+
+HISTORY_DB = os.path.join(BASE_DIR, "query_history.db")
+analysis.HISTORY_DB = HISTORY_DB
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+SSE_HEADERS = {"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+MAX_HISTORY = 10
+
+
+def _warm_catalog():
+    try:
+        get_catalog(engine)
+    except Exception:
+        log.exception("catalog warm-up failed (will retry on the first question)")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    threading.Thread(target=_warm_catalog, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Yogi by DataYog — Telecom KPI Analytics API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,108 +76,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Templates directory - create 'templates' folder and put index.html there
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
-
-SQL_ROW_LIMIT = 100
-ALLOWED_TABLE = "kpi_multi_vendor.c_dashboard_kpis"
-HISTORY_DB = os.path.join(BASE_DIR, "query_history.db")
-KPI_DICTIONARY = {
-    "cssr_bh": "Call Setup Success Rate (Busy Hour)",
-    "cssr_daily": "Call Setup Success Rate (Daily)",
-    "tch_availability_daily": "Network Availability",
-    "tch_drops_bh": "TCH Drop Rate (Busy Hour)",
-    "tch_drops_daily": "TCH Drop Rate (Daily)",
-    "data_sr_bh": "Data Success Rate (Busy Hour)",
-    "data_sr_daily": "Data Success Rate (Daily)",
-    "ultilization": "Cell Utilization",
-    "dl_volume_bh": "Download Volume (Busy Hour)",
-    "dl_volume_daily": "Download Volume (Daily)",
-    "cs_traffic_bh": "Circuit Switched Traffic (Busy Hour)",
-    "cs_traffic_daily": "Circuit Switched Traffic (Daily)",
-    "ul_volume_bh": "Upload Volume (Busy Hour)",
-    "ul_volume_daily": "Upload Volume (Daily)",
-}
-ALLOWED_COLUMNS = {
-    "date", "did", "site_name", "cell_name", "region", "vendor", "technology", "status",
-    "cssr_bh", "cssr_daily",
-    "data_sr_bh", "data_sr_daily",
-    "tch_availability_daily",
-    "tch_drops_bh", "tch_drops_daily",
-    "tch_assignments_bh", "tch_assignments_daily",
-    "cs_traffic_bh", "cs_traffic_daily",
-    "dl_volume_bh", "dl_volume_daily",
-    "ul_volume_bh", "ul_volume_daily",
-    "ultilization", "normalized_utlilization", "configured_capacity",
-}
-SQL_IGNORED_WORDS = {
-    "select", "from", "where", "and", "or", "not", "null", "is", "in", "like",
-    "between", "case", "when", "then", "else", "end", "as", "on", "join",
-    "inner", "left", "right", "full", "outer", "group", "by", "order", "limit",
-    "offset", "desc", "asc", "distinct", "having", "with", "over", "partition",
-    "current_date", "interval", "day", "month", "year", "quarter", "week",
-    "hour", "minute", "second", "epoch", "dow", "doy",
-    "sum", "avg", "min", "max", "count", "round", "date_trunc", "date_part",
-    "coalesce", "cast", "extract", "nullif", "greatest", "least",
-    "to_char", "to_date", "to_timestamp", "string_agg", "array_agg",
-    "numeric", "float", "integer", "int", "bigint", "smallint", "double",
-    "precision", "boolean", "bool", "text", "varchar", "timestamp", "timestamptz",
-    "true", "false",
-    "ilike", "similar", "escape", "lateral", "cross", "natural", "using",
-    "except", "intersect", "union", "all", "exists", "any", "some",
-    "rows", "range", "unbounded", "following", "preceding", "current", "row",
-    "filter", "within",
-}
-# Strong terms = unambiguously telecom (reduce false positives)
-STRONG_TELECOM_TERMS = {
-    "cssr", "tch", "bh", "ultilization", "utilization",
-    "cssr_bh", "cssr_daily", "tch_drops", "tch_availability",
-    "data_sr", "data_sr_bh", "dl_volume", "cs_traffic",
-    "degraded", "kpi", "availability",
-}
-# Weak terms = could appear in non-telecom context
-TELECOM_QUERY_TERMS = {
-    "site", "sites", "cell", "cells", "region", "vendor", "technology",
-    "traffic", "volume", "drops", "trend", "comparison", "network",
-    "voice", "dl", "lte", "gsm", "umts", "4g", "3g", "2g",
-}
-
-# Telecom knowledge base — answers KPI definition questions without DB
-TELECOM_KB = {
-    "cssr": "**CSSR (Call Setup Success Rate)** — Percentage of call setup attempts that successfully complete. Formula: Successful Seizures / Total Attempts × 100. **Higher is better.** Typical target: ≥ 95%.",
-    "cssr_bh": "**CSSR_BH** — Call Setup Success Rate measured during the Busy Hour (peak traffic period). Most critical KPI for voice quality assessment.",
-    "availability": "**Network Availability (tch_availability_daily)** — Percentage of time a cell is operational. Formula: Available Hours / Total Hours × 100. **Higher is better.** Target: ≥ 99%.",
-    "tch_drops": "**TCH Drop Rate** — Percentage of established calls that are dropped before the subscriber ends them. **Lower is better.** Threshold: ≤ 1%.",
-    "tch_drops_bh": "**TCH Drops BH** — TCH Drop Rate measured during the Busy Hour. Key indicator of radio link quality and coverage issues.",
-    "data_sr": "**Data Success Rate** — Percentage of successful data sessions (GPRS/EDGE/LTE). Higher is better. Indicates data network quality.",
-    "data_sr_bh": "**Data SR BH** — Data Success Rate during Busy Hour. Critical for measuring user data experience at peak times.",
-    "ultilization": "**Cell Utilization** — Percentage of available cell capacity being used. High utilization (>80%) indicates congestion risk.",
-    "utilization": "**Cell Utilization** — Same as ultilization. Percentage of available cell capacity being used. High values indicate need for capacity expansion.",
-    "dl_volume": "**DL Volume** — Total data downloaded by users (Downlink Volume). Measured in MB/GB. Indicates data demand.",
-    "cs_traffic": "**CS Traffic** — Circuit Switched Traffic, measured in Erlangs. Represents voice traffic load on the network.",
-    "vendor": "In this system, **Vendor** refers to the network equipment manufacturer (e.g., Huawei, Ericsson, Nokia) for each cell or site.",
-    "bh": "**BH (Busy Hour)** — The one-hour period in a day with the highest traffic load. KPIs measured during BH represent worst-case network conditions.",
-    "kpi": "**KPI (Key Performance Indicator)** — Metrics used to evaluate telecom network performance. Main KPIs: CSSR, Availability, TCH Drops, Data SR, Utilization, DL Volume.",
-}
-FORBIDDEN_SQL = re.compile(
-    r"\b(insert|update|delete|drop|alter|truncate|create|replace|grant|revoke|copy|call|do|execute|merge)\b",
-    re.IGNORECASE,
-)
 
 
 @app.get("/")
 def home(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html"
-    )
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 def check_database() -> str:
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return "connected"
+        rows, _ = execute_readonly(engine, "SELECT 1 AS ok", 1, timeout="5s")
+        return "connected" if rows else "disconnected"
     except Exception:
         return "disconnected"
 
@@ -165,16 +95,20 @@ def check_database() -> str:
 @app.get("/health")
 async def health_check():
     """Reports Claude API and PostgreSQL status. Always HTTP 200 so the UI can render it."""
-    llm_status = await llm.ping()
-    db_status = check_database()
+    llm_status, db_status = await asyncio.gather(llm.ping(), asyncio.to_thread(check_database))
     healthy = llm_status["llm"] == "connected" and db_status == "connected"
+    cat = _catalog_ready()
     return JSONResponse({
         "status": "healthy" if healthy else "degraded",
         "service": "Yogi by DataYog",
         "db": db_status,
+        "catalog": "loaded" if cat else "loading",
+        "data_range": f"{cat.date_min} to {cat.date_max}" if cat else None,
         **llm_status,
     })
 
+
+# ====================================================================== prompts & canned answers
 
 YOGI_SYSTEM_PROMPT = """You are Yogi, an enterprise-grade AI assistant built by DataYog Analytics Pvt. Ltd.
 
@@ -220,6 +154,18 @@ You MUST reply EXACTLY:
 Do not add anything else.
 
 =====================
+NETWORK DATA
+=====================
+You have the tool query_network_kpis. It queries the telecom KPI database (sites, cells, regions,
+technologies 2G/3G/4G/5G, KPIs such as CSSR, availability, drop rate, data success rate, traffic,
+data volume, down cells) and shows the user a table, a chart and a summary.
+- Call it whenever the user asks about this network's data, performance, sites, cells, regions or KPI values,
+  including follow-ups to an earlier data answer. Pass a complete standalone question that resolves
+  references to earlier turns (e.g. "ab iske cells dikhao" -> "worst cells of site Zomba_Dam last 7 days").
+- Never invent KPI values; get them with the tool.
+- Do not call it for general knowledge, definitions or coding questions.
+
+=====================
 RESPONSE STYLE
 =====================
 - Professional but slightly friendly
@@ -240,275 +186,20 @@ User: "database connect kaise kare?"
 Answer: "Database connect karne ke liye tumhe connection string configure karni hogi..."
 """
 
-
-@app.post("/chat/stream")
-async def chat_stream(request: Request):
-    """
-    Streaming endpoint that returns Server-Sent Events (SSE) with Claude streaming.
-    Implements retry logic on client side, but backend also handles graceful errors.
-    """
-    try:
-        body = await request.json()
-        prompt = body.get("prompt", "").strip()
-
-        if not prompt:
-            raise HTTPException(status_code=400, detail="Prompt is required")
-
-        question_type = classify_question(prompt)
-
-        if question_type == "telecom_db":
-            async def generate_telecom_stream() -> AsyncGenerator[str, None]:
-                try:
-                    result = await run_telecom_analysis(prompt)
-                    yield f"data: {json.dumps({'chunk': result['summary']})}\n\n"
-                    telecom_payload = json.dumps({
-                        "telecom_data": {
-                            "rows": result["rows"][:100],
-                            "row_count": result["row_count"],
-                            "chart_data": result.get("chart_data", {}),
-                            "chart_type": result["chart_type"],
-                            "intent": result["intent"],
-                            "sql": result["sql"],
-                            "metrics": result["metrics"],
-                            "question": result["question"],
-                        }
-                    })
-                    yield f"data: {telecom_payload}\n\n"
-                    yield f"data: {json.dumps({'done': True})}\n\n"
-                    yield "data: [DONE]\n\n"
-                except Exception as e:
-                    detail = friendly_error_detail(e)
-                    yield f"data: {json.dumps({'chunk': f'Telecom analytics error: {detail}'})}\n\n"
-                    yield f"data: {json.dumps({'done': True})}\n\n"
-                    yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                generate_telecom_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
-            )
-
-        if question_type == "off_topic":
-            async def generate_off_topic_stream() -> AsyncGenerator[str, None]:
-                yield f"data: {json.dumps({'chunk': OFF_TOPIC_RESPONSE})}\n\n"
-                yield f"data: {json.dumps({'done': True})}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                generate_off_topic_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
-            )
-
-        if question_type == "telecom_knowledge":
-            kb_answer = get_kb_answer(prompt)
-            if kb_answer:
-                async def generate_kb_stream() -> AsyncGenerator[str, None]:
-                    yield f"data: {json.dumps({'chunk': kb_answer})}\n\n"
-                    yield f"data: {json.dumps({'done': True})}\n\n"
-                    yield "data: [DONE]\n\n"
-
-                return StreamingResponse(
-                    generate_kb_stream(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
-                )
-            # No KB match — fall through to Claude general chat below
-
-        async def generate_stream() -> AsyncGenerator[str, None]:
-            try:
-                async for chunk in llm.stream_chat(YOGI_SYSTEM_PROMPT, prompt):
-                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-                yield f"data: {json.dumps({'done': True})}\n\n"
-                yield "data: [DONE]\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'error': llm.friendly_error(e)})}\n\n"
-
-        return StreamingResponse(
-            generate_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/chat")
-async def chat_no_stream(request: Request):
-    """Legacy non-streaming endpoint (fallback)"""
-    try:
-        body = await request.json()
-        prompt = body.get("prompt", "").strip()
-
-        question_type = classify_question(prompt)
-        if question_type == "off_topic":
-            return JSONResponse({"response": OFF_TOPIC_RESPONSE})
-        if question_type == "telecom_knowledge":
-            kb_answer = get_kb_answer(prompt)
-            if kb_answer:
-                return JSONResponse({"response": kb_answer})
-        if question_type == "telecom_db":
-            result = await run_telecom_analysis(prompt)
-            return JSONResponse({"response": format_telecom_chat_response(result), "data": result})
-
-        answer = await llm.complete(YOGI_SYSTEM_PROMPT, prompt, effort=llm.EFFORT_CHAT)
-        return JSONResponse({"response": answer})
-    except Exception as e:
-        return JSONResponse({"response": f"Error: {llm.friendly_error(e)}"}, status_code=500)
-
-
-def json_safe(value):
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    return value
-
-
-def init_query_history():
-    with sqlite3.connect(HISTORY_DB) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS query_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question TEXT NOT NULL,
-                generated_sql TEXT NOT NULL,
-                row_count INTEGER NOT NULL,
-                execution_time REAL NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-
-def save_query_history(question: str, sql: str, row_count: int, execution_time: float):
-    init_query_history()
-    with sqlite3.connect(HISTORY_DB) as conn:
-        conn.execute(
-            """
-            INSERT INTO query_history
-            (question, generated_sql, row_count, execution_time, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (question, sql, row_count, execution_time, datetime.utcnow().isoformat()),
-        )
-
-
-def get_postgres_schema() -> str:
-    query = text("""
-        SELECT table_schema, table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'kpi_multi_vendor'
-          AND table_name = 'c_dashboard_kpis'
-          AND column_name IN :columns
-        ORDER BY table_schema, table_name, ordinal_position
-    """).bindparams(bindparam("columns", expanding=True))
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"columns": list(ALLOWED_COLUMNS)}).all()
-    columns = [f"{row.column_name} {row.data_type}" for row in rows]
-    return f"- {ALLOWED_TABLE}: {', '.join(columns)}" if columns else ""
-
-
-def get_available_kpi_columns() -> set:
-    query = text("""
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'kpi_multi_vendor'
-          AND table_name = 'c_dashboard_kpis'
-          AND column_name IN :columns
-    """).bindparams(bindparam("columns", expanding=True))
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"columns": list(ALLOWED_COLUMNS)}).all()
-    return {row.column_name.lower() for row in rows}
-
-
-def detect_intent(question: str) -> str:
-    q = question.lower()
-    # ranking check before trend so "worst sites this month" → ranking, not trend
-    if any(word in q for word in ["top", "highest", "best", "worst", "lowest", "degraded", "below"]):
-        return "ranking"
-    if any(word in q for word in ["trend", "last 30", "daily", "over time", "monthly", "weekly"]):
-        return "trend"
-    if any(word in q for word in ["compare", "comparison", "vs", "vendor"]):
-        return "comparison"
-    if any(word in q for word in ["distribution", "share", "split", "mix"]):
-        return "distribution"
-    if any(word in q for word in ["month", "last 7", "last 30", "week"]):
-        return "trend"
-    return "summary"
-
-
-def classify_question(question: str) -> str:
-    """
-    Returns one of: 'telecom_db', 'telecom_knowledge', 'general', 'off_topic'
-    telecom_db       → needs DB query
-    telecom_knowledge → KPI definition / telecom concept question
-    general          → tech/coding/general — route to Claude
-    off_topic        → completely unrelated — polite redirect
-    """
-    q = question.lower()
-    words = set(re.findall(r"[a-zA-Z_]+", q))
-
-    has_specific_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", question))
-    has_strong_term = bool(words & STRONG_TELECOM_TERMS) or any(kpi.lower() in q for kpi in KPI_DICTIONARY)
-    has_weak_term = bool(words & TELECOM_QUERY_TERMS)
-    analysis_words = {
-        "top", "worst", "best", "lowest", "highest", "degraded", "below",
-        "trend", "compare", "comparison", "show", "find", "list",
-        "yesterday", "today", "month", "days", "last", "week",
-        "get", "fetch", "check", "report",
-    }
-    has_analysis = bool(words & analysis_words)
-    strong_analysis = bool(words & {"degraded", "worst", "cssr", "availability", "yesterday", "last", "drops", "tch"})
-
-    # 1. Telecom DB: needs data from database
-    if has_specific_date and (has_strong_term or has_weak_term):
-        return "telecom_db"
-    if has_strong_term and has_analysis:
-        return "telecom_db"
-    if has_weak_term and has_analysis and (strong_analysis or len(words & TELECOM_QUERY_TERMS) >= 2):
-        return "telecom_db"
-
-    # 2. Telecom knowledge: KPI definition questions (no DB needed)
-    knowledge_triggers = {"what is", "what are", "define", "explain", "kya hai", "kya hota", "meaning", "full form", "stands for", "difference between"}
-    has_knowledge_intent = any(t in q for t in knowledge_triggers)
-    if has_knowledge_intent and (has_strong_term or has_weak_term):
-        return "telecom_knowledge"
-
-    # 3. DataYog / company questions → Claude general
-    if any(t in q for t in ["datayog", "company", "who made", "developer", "creator", "banaya", "kisne"]):
-        return "general"
-
-    # 4. General tech/programming → Claude general
-    tech_words = {
-        "python", "javascript", "java", "code", "program", "function", "class",
-        "api", "error", "bug", "debug", "algorithm", "database", "sql", "html",
-        "css", "framework", "library", "tutorial", "how to", "install", "docker",
-        "machine learning", "ai", "model", "training",
-    }
-    if bool(words & tech_words) or any(t in q for t in ["how to", "what is the", "how does"]):
-        return "general"
-
-    # 5. Completely off-topic (weather, food, movies, sports, etc.)
-    off_topic_words = {
-        "weather", "food", "movie", "film", "sport", "cricket", "football",
-        "recipe", "cook", "restaurant", "hotel", "travel", "flight", "train",
-        "joke", "funny", "love", "relationship", "health", "medicine", "doctor",
-        "news", "politics", "government", "stock", "share", "price", "buy", "sell",
-    }
-    if bool(words & off_topic_words):
-        return "off_topic"
-
-    return "general"
-
-
-def is_telecom_analytics_question(question: str) -> bool:
-    return classify_question(question) == "telecom_db"
-
+DATA_TOOL = {
+    "name": "query_network_kpis",
+    "description": ("Query the telecom network KPI database and show the user a table, chart and summary. "
+                    "Use for any question about network data: sites, cells, regions, technologies, vendors, "
+                    "KPIs (CSSR, availability, drop rate, data success rate, traffic, data volume, down cells), "
+                    "rankings, trends and comparisons. Input: one complete standalone question."),
+    "input_schema": {
+        "type": "object",
+        "properties": {"question": {"type": "string", "description": "Standalone question about the network data"}},
+        "required": ["question"],
+        "additionalProperties": False,
+    },
+    "eager_input_streaming": True,
+}
 
 OFF_TOPIC_RESPONSE = """I'm **Yogi by DataYog** — your intelligent guide for network operations, specialized in **Telecom Network KPI Analytics**.
 
@@ -525,565 +216,464 @@ Please ask me about your telecom network data. Example queries:
 - *"Availability below 95% last 7 days"*"""
 
 
-def get_kb_answer(question: str) -> str | None:
-    q = question.lower()
-    for key, answer in TELECOM_KB.items():
-        if key in q:
-            return answer
-    return None
+# ====================================================================== routing
 
-
-def extract_limit(question: str, default: int = 10) -> int:
-    """Extract LIMIT N from question like 'top 5', 'worst 20', 'show 50'."""
-    m = re.search(r'\b(?:top|worst|best|show|get|fetch|list)\s+(\d+)\b', question.lower())
-    if m:
-        return min(int(m.group(1)), SQL_ROW_LIMIT)
-    return default
-
-
-def recommend_chart(intent: str, row_count: int) -> str:
-    if intent in {"ranking", "comparison"}:
-        return "bar"
-    if intent == "trend":
-        return "line"
-    if intent == "distribution":
-        return "pie"
-    return "table" if row_count <= 10 else "bar"
-
-
-_NON_METRIC_COLS = {
-    "date", "site_name", "cell_name", "region", "vendor", "technology",
-    "did", "status", "latitude", "longitude", "operator",
+STRONG_TELECOM_TERMS = {
+    "cssr", "tch", "bh", "ultilization", "utilization", "kpi", "kpis", "availability", "degraded",
+    "degradation", "erlang", "erlangs", "outage", "outages", "bts", "nodeb", "enodeb", "gnodeb",
 }
-_CHART_COLORS = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#f43f5e"]
+TELECOM_QUERY_TERMS = {
+    "site", "sites", "cell", "cells", "region", "regions", "vendor", "vendors", "technology", "technologies",
+    "traffic", "volume", "drops", "drop", "trend", "comparison", "network", "voice", "dl", "ul", "lte",
+    "gsm", "umts", "2g", "3g", "4g", "5g", "tower", "towers", "sector", "sectors", "data", "huawei",
+}
+DATA_WORDS = {
+    "show", "list", "give", "get", "fetch", "find", "check", "display", "report", "analysis", "analyse",
+    "analyze", "analytics", "performance", "perform", "performing", "health", "status", "summary",
+    "summarize", "overview", "trend", "trends", "compare", "comparison", "vs", "versus", "top", "worst",
+    "best", "lowest", "highest", "bottom", "below", "above", "under", "less", "more", "greater", "count",
+    "total", "average", "avg", "which", "kitna", "kitne", "kitni", "kaisa", "kaise", "kaisi", "dikhao",
+    "dikha", "dikhaiye", "batao", "bata", "bataiye", "nikalo", "nikal", "chahiye", "sabse", "kharab",
+    "achha", "accha", "wise", "breakdown", "distribution", "share", "split", "degraded", "rank", "ranking",
+    "number", "value", "values", "level", "details", "detail", "how", "many", "kaun", "kaunse", "konsa",
+    "today", "yesterday", "kal", "aaj", "last", "past", "week", "month", "daily", "weekly", "monthly",
+    "days", "din", "hafte", "mahine", "date", "pichle", "pichhle", "latest", "current", "previous",
+}
+FOLLOW_UP_CUES = {
+    "iske", "iska", "iski", "inke", "inka", "inki", "unke", "uska", "uski", "isme", "usme", "inme", "same",
+    "also", "bhi", "only", "sirf", "ab", "now", "instead", "those", "these", "them", "it", "its", "that",
+    "previous", "above", "more", "breakdown", "drill", "details", "detail", "chart", "graph", "table",
+    "aur", "and", "what", "about", "for", "but", "phir", "fir", "wahi", "vahi", "isko", "usko", "inko",
+}
+KNOWLEDGE_TRIGGERS = ("what is", "what are", "what's", "define", "definition", "explain", "kya hai", "kya hota",
+                      "kya hote", "matlab", "meaning", "full form", "stands for", "difference between",
+                      "how is", "formula", "calculate", "calculated", "kise kehte")
+OFF_TOPIC_WORDS = {
+    "weather", "mausam", "food", "movie", "film", "sport", "cricket", "football", "recipe", "cook",
+    "restaurant", "hotel", "travel", "flight", "train", "joke", "funny", "love", "relationship", "health",
+    "medicine", "doctor", "news", "politics", "government", "stock", "price", "buy", "sell", "song", "gaana",
+    "score", "match", "khana",
+}
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}|\b(today|yesterday|aaj|kal|last|past|this|previous|pichle|pichhle)\s+"
+                     r"(\d+\s+)?(day|days|week|weeks|month|months|din|hafte|mahine)\b|\b(today|yesterday)\b",
+                     re.IGNORECASE)
 
 
-def build_chart_data(rows: list, chart_type: str) -> dict:
-    if not rows or chart_type == "table":
-        return {}
-    first = rows[0]
-    keys = list(first.keys())
-    if chart_type == "line":
-        label_col = "date" if "date" in keys else next(
-            (c for c in ["region", "vendor", "site_name"] if c in keys), None
-        )
-    else:
-        label_col = next(
-            (c for c in ["region", "vendor", "site_name", "cell_name", "technology", "date"] if c in keys),
-            None
-        )
-    value_cols = [
-        k for k in keys
-        if k.lower() not in _NON_METRIC_COLS
-        and isinstance(first.get(k), (int, float))
-    ]
-    if not label_col or not value_cols:
-        return {}
-    display = rows[:50]
-    datasets = []
-    for i, col in enumerate(value_cols[:4]):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        ds = {
-            "label": KPI_DICTIONARY.get(col, col.replace("_", " ").title()),
-            "data": [row.get(col) for row in display],
-            "backgroundColor": color + "99",
-            "borderColor": color,
-            "borderWidth": 2,
-        }
-        if chart_type == "line":
-            ds["fill"] = False
-            ds["tension"] = 0.3
-        datasets.append(ds)
-    return {
-        "type": chart_type,
-        "labels": [str(row.get(label_col, "")) for row in display],
-        "datasets": datasets,
-    }
+def _catalog_or_none():
+    return _catalog_ready()
 
 
-def kpi_prompt_block() -> str:
-    return "\n".join(f"- {name}: {label}" for name, label in KPI_DICTIONARY.items())
+def is_follow_up(question: str, history: list) -> bool:
+    if not analysis.last_plan(history):
+        return False
+    words = norm(question).split()
+    if len(words) <= 6:
+        return True
+    return bool(set(words) & FOLLOW_UP_CUES) and len(words) <= 14
 
 
-def telecom_examples_block() -> str:
-    return f"""
-Question: Top 10 degraded sites yesterday
-SQL: SELECT site_name, region, vendor, AVG(cssr_bh) AS cssr_bh, AVG(data_sr_bh) AS data_sr_bh FROM {ALLOWED_TABLE} WHERE date = CURRENT_DATE - INTERVAL '1 day' GROUP BY site_name, region, vendor ORDER BY cssr_bh ASC, data_sr_bh ASC LIMIT 10
-
-Question: Top 10 degraded sites yesterday in Lilongwe
-SQL: SELECT site_name, region, vendor, AVG(cssr_bh) AS cssr_bh, AVG(data_sr_bh) AS data_sr_bh FROM {ALLOWED_TABLE} WHERE date = CURRENT_DATE - INTERVAL '1 day' AND region ILIKE '%Lilongwe%' GROUP BY site_name, region, vendor ORDER BY cssr_bh ASC, data_sr_bh ASC LIMIT 10
-
-Question: Worst cells last 7 days
-SQL: SELECT cell_name, site_name, region, AVG(cssr_bh) AS cssr_bh, AVG(data_sr_bh) AS data_sr_bh FROM {ALLOWED_TABLE} WHERE date >= CURRENT_DATE - INTERVAL '7 day' GROUP BY cell_name, site_name, region ORDER BY cssr_bh ASC, data_sr_bh ASC LIMIT 10
-
-Question: Worst region by CSSR
-SQL: SELECT region, AVG(cssr_bh) AS cssr_bh FROM {ALLOWED_TABLE} GROUP BY region ORDER BY cssr_bh ASC LIMIT 10
-
-Question: Availability below 95%
-SQL: SELECT site_name, cell_name, region, vendor, AVG(tch_availability_daily) AS tch_availability_daily FROM {ALLOWED_TABLE} GROUP BY site_name, cell_name, region, vendor HAVING AVG(tch_availability_daily) < 95 ORDER BY tch_availability_daily ASC LIMIT 100
-
-Question: Highest utilization sites
-SQL: SELECT site_name, region, vendor, AVG(ultilization) AS ultilization FROM {ALLOWED_TABLE} GROUP BY site_name, region, vendor ORDER BY ultilization DESC LIMIT 10
-
-Question: Vendor comparison
-SQL: SELECT vendor, AVG(cssr_bh) AS cssr_bh, AVG(data_sr_bh) AS data_sr_bh, SUM(cs_traffic_daily) AS cs_traffic_daily, AVG(tch_availability_daily) AS tch_availability_daily FROM {ALLOWED_TABLE} GROUP BY vendor ORDER BY vendor LIMIT 100
-
-Question: Traffic trend last 30 days
-SQL: SELECT date, SUM(cs_traffic_daily) AS cs_traffic_daily FROM {ALLOWED_TABLE} WHERE date >= CURRENT_DATE - INTERVAL '30 day' GROUP BY date ORDER BY date LIMIT 100
-
-Question: 2026-03-22 get CSSR
-SQL: SELECT region, vendor, AVG(cssr_bh) AS cssr_bh, AVG(data_sr_bh) AS data_sr_bh, AVG(tch_availability_daily) AS tch_availability_daily FROM {ALLOWED_TABLE} WHERE date = '2026-03-22' GROUP BY region, vendor ORDER BY region LIMIT 100
-
-Question: CSSR on 2026-03-15
-SQL: SELECT region, vendor, AVG(cssr_bh) AS cssr_bh FROM {ALLOWED_TABLE} WHERE date = '2026-03-15' GROUP BY region, vendor ORDER BY region LIMIT 100
-""".strip()
-
-
-def build_rule_based_sql(question: str, available_columns: set) -> str | None:
+def classify_question(question: str, history: list | None = None, cat=None) -> str:
+    """
+    Returns one of: 'telecom_db', 'telecom_knowledge', 'meta', 'general', 'off_topic'
+    telecom_db        → needs DB query
+    telecom_knowledge → KPI definition / telecom concept question
+    meta              → what data exists (regions, dates, KPIs) - answered from the catalog
+    general           → tech/coding/general — Claude (which can still call the data tool)
+    off_topic         → completely unrelated — polite redirect
+    """
+    history = history or []
+    cat = cat if cat is not None else _catalog_or_none()
     q = question.lower()
-    has = available_columns.__contains__
-    date_filter = ""
-    specific_date_match = re.search(r"(\d{4}-\d{2}-\d{2})", question)
-    if specific_date_match:
-        date_filter = f"WHERE date = '{specific_date_match.group(1)}'"
-    elif "yesterday" in q:
-        date_filter = "WHERE date = CURRENT_DATE - INTERVAL '1 day'"
-    elif "today" in q:
-        date_filter = "WHERE date = CURRENT_DATE"
-    elif "this week" in q or "current week" in q:
-        date_filter = "WHERE date >= DATE_TRUNC('week', CURRENT_DATE)"
-    elif "this month" in q or "current month" in q:
-        date_filter = "WHERE date >= DATE_TRUNC('month', CURRENT_DATE)"
-    elif "last 7" in q or "7 day" in q or ("week" in q and "this" not in q):
-        date_filter = "WHERE date >= CURRENT_DATE - INTERVAL '7 day'"
-    elif "last 30" in q or "30 day" in q:
-        date_filter = "WHERE date >= CURRENT_DATE - INTERVAL '30 day'"
-    elif "last month" in q or "previous month" in q:
-        date_filter = "WHERE date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND date < DATE_TRUNC('month', CURRENT_DATE)"
-    # Extract location filter (city/region name after "in <Proper Noun>")
-    location_condition = ""
-    location_match = re.search(r'\bin\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)', question)
-    if location_match:
-        location = re.sub(r"[^a-zA-Z0-9 ]", "", location_match.group(1).strip())
-        if location:
-            location_condition = f"region ILIKE '%{location}%'"
+    qn = norm(question)
+    words = set(qn.split())
+    mentions = cat.extract(question) if cat else []
+    named = {m.kind for m in mentions}
+    has_entity = bool(named & {"site", "cell"})
+    has_place = bool(named & {"region", "technology", "vendor"})
+    unknown_with_context = any(m.kind == "unknown" for m in mentions) and bool(words & {"site", "cell", "sites", "cells", "tower"})
+    metric_hit = bool(_find_metrics(qn))
+    strong = bool(words & STRONG_TELECOM_TERMS) or metric_hit
+    weak = bool(words & TELECOM_QUERY_TERMS)
+    data_word = bool(words & DATA_WORDS) or bool(re.search(r"\b(how many|kitne|top \d+|\d+ se kam|below \d+)", q))
+    has_date = bool(DATE_RE.search(question)) or bool(re.search(r"\d{4}-\d{2}-\d{2}", question))
+    knowledge = any(t in q for t in KNOWLEDGE_TRIGGERS)
 
-    # Build combined WHERE clause
-    where_parts = []
-    if date_filter:
-        where_parts.append(date_filter[len("WHERE "):])
-    if location_condition:
-        where_parts.append(location_condition)
-    df = " WHERE " + " AND ".join(where_parts) if where_parts else ""
-    lim = extract_limit(question)
+    if meta_answer(question, cat) is not None:
+        return "meta"
+    if knowledge and not has_entity and not has_date and (strong or weak) and \
+            not (words & {"show", "list", "top", "worst", "best", "dikhao", "batao", "trend", "compare", "kitna", "kitne"}) \
+            and not (named & {"region"}):
+        return "telecom_knowledge"
+    if has_entity or unknown_with_context:
+        return "telecom_db"
+    if strong and (data_word or has_date or has_place or weak or len(words) <= 5):
+        return "telecom_db"
+    if (weak or has_place) and (data_word or has_date) and (strong or has_place or len(words & TELECOM_QUERY_TERMS) >= 2
+                                                          or words & {"degraded", "worst", "best", "top", "drops", "traffic", "volume"}):
+        return "telecom_db"
+    if has_place and (weak or strong):
+        return "telecom_db"
+    if weak and words & {"health", "performance", "report", "status", "overview", "summary", "analysis", "kpi", "kpis"}:
+        return "telecom_db"     # "network ka overall health batao", "network performance report"
+    if is_follow_up(question, history) and not (words & OFF_TOPIC_WORDS):
+        return "telecom_db"
+    if strong and not knowledge:
+        return "telecom_db"
+    if any(t in q for t in ["datayog", "company", "who made", "developer", "creator", "banaya", "kisne"]):
+        return "general"
+    if knowledge and (strong or weak):
+        return "telecom_knowledge"
+    if words & OFF_TOPIC_WORDS and not (strong or weak or has_place):
+        return "off_topic"
+    return "general"
 
-    # plain KPI summary for a specific date (e.g., "2026-03-22 get CSSR")
-    if specific_date_match and not any(word in q for word in ["worst", "best", "top", "trend", "compare", "vendor", "region"]):
-        metrics = []
-        if has("cssr_bh"):
-            metrics.append("AVG(cssr_bh) AS cssr_bh")
-        if has("data_sr_bh"):
-            metrics.append("AVG(data_sr_bh) AS data_sr_bh")
-        if has("tch_availability_daily"):
-            metrics.append("AVG(tch_availability_daily) AS tch_availability_daily")
-        if has("cs_traffic_daily"):
-            metrics.append("SUM(cs_traffic_daily) AS cs_traffic_daily")
-        if metrics:
-            return f"SELECT region, vendor, {', '.join(metrics)} FROM {ALLOWED_TABLE}{df} GROUP BY region, vendor ORDER BY region LIMIT {SQL_ROW_LIMIT}"
 
-    # availability below threshold
-    if "availability" in q and any(word in q for word in ["below", "less", "under", "low"]) and has("tch_availability_daily"):
-        threshold_match = re.search(r"(\d+(?:\.\d+)?)\s*%?", q)
-        threshold = float(threshold_match.group(1)) if threshold_match else 95.0
-        return f"SELECT site_name, cell_name, region, vendor, AVG(tch_availability_daily) AS tch_availability_daily FROM {ALLOWED_TABLE}{df} GROUP BY site_name, cell_name, region, vendor HAVING AVG(tch_availability_daily) < {threshold} ORDER BY tch_availability_daily ASC LIMIT 100"
+def _telecom_words(question: str) -> bool:
+    words = set(norm(question).split())
+    return bool(words & (STRONG_TELECOM_TERMS | TELECOM_QUERY_TERMS)) or bool(_find_metrics(norm(question)))
 
-    # best/top performing sites by CSSR
-    if any(word in q for word in ["best", "top", "highest", "good"]) and "site" in q and has("cssr_bh"):
-        if not any(word in q for word in ["degraded", "worst", "lowest"]):
-            metric = ", AVG(data_sr_bh) AS data_sr_bh" if has("data_sr_bh") else ""
-            order = "cssr_bh DESC, data_sr_bh DESC" if has("data_sr_bh") else "cssr_bh DESC"
-            return f"SELECT site_name, region, vendor, AVG(cssr_bh) AS cssr_bh{metric} FROM {ALLOWED_TABLE}{df} GROUP BY site_name, region, vendor ORDER BY {order} LIMIT {lim}"
 
-    if ("degraded" in q or "worst" in q or "lowest" in q) and "site" in q and has("cssr_bh"):
-        metric = ", AVG(data_sr_bh) AS data_sr_bh" if has("data_sr_bh") else ""
-        order = "cssr_bh ASC, data_sr_bh ASC" if has("data_sr_bh") else "cssr_bh ASC"
-        return f"SELECT site_name, region, vendor, AVG(cssr_bh) AS cssr_bh{metric} FROM {ALLOWED_TABLE}{df} GROUP BY site_name, region, vendor ORDER BY {order} LIMIT {lim}"
-    if "worst" in q and "cell" in q and has("cssr_bh"):
-        metric = ", AVG(data_sr_bh) AS data_sr_bh" if has("data_sr_bh") else ""
-        return f"SELECT cell_name, site_name, region, AVG(cssr_bh) AS cssr_bh{metric} FROM {ALLOWED_TABLE}{df} GROUP BY cell_name, site_name, region ORDER BY cssr_bh ASC LIMIT {lim}"
-    if "vendor" in q and any(word in q for word in ["worst", "lowest", "degraded", "performing"]) and has("cssr_bh"):
-        metrics = ["AVG(cssr_bh) AS cssr_bh"]
-        order = "cssr_bh ASC"
-        if has("data_sr_bh"):
-            metrics.append("AVG(data_sr_bh) AS data_sr_bh")
-            order += ", data_sr_bh ASC"
-        if has("cs_traffic_daily"):
-            metrics.append("SUM(cs_traffic_daily) AS cs_traffic_daily")
-        return f"SELECT vendor, {', '.join(metrics)} FROM {ALLOWED_TABLE}{df} GROUP BY vendor ORDER BY {order} LIMIT {lim}"
-    if "region" in q and any(word in q for word in ["worst", "lowest", "degraded", "performing"]) and has("cssr_bh"):
-        metric = ", AVG(data_sr_bh) AS data_sr_bh" if has("data_sr_bh") else ""
-        order = "cssr_bh ASC, data_sr_bh ASC" if has("data_sr_bh") else "cssr_bh ASC"
-        return f"SELECT region, AVG(cssr_bh) AS cssr_bh{metric} FROM {ALLOWED_TABLE}{df} GROUP BY region ORDER BY {order} LIMIT {lim}"
+def is_telecom_analytics_question(question: str) -> bool:
+    return classify_question(question) == "telecom_db"
 
-    # Region comparison / all-regions summary
-    if "region" in q and any(w in q for w in ["compare", "comparison", "all region", "by region", "region wise", "regionwise", "each region"]):
-        metrics = []
-        if has("tch_availability_daily"):
-            metrics.append("AVG(tch_availability_daily) AS tch_availability_daily")
-        if has("cssr_bh"):
-            metrics.append("AVG(cssr_bh) AS cssr_bh")
-        if has("data_sr_bh"):
-            metrics.append("AVG(data_sr_bh) AS data_sr_bh")
-        if has("cs_traffic_daily"):
-            metrics.append("SUM(cs_traffic_daily) AS cs_traffic_daily")
-        if metrics:
-            order_col = metrics[0].split(" AS ")[-1]
-            return f"SELECT region, {', '.join(metrics)} FROM {ALLOWED_TABLE}{df} GROUP BY region ORDER BY {order_col} DESC LIMIT 100"
 
-    # General availability summary (no threshold — just show availability by region/vendor)
-    if "availability" in q and has("tch_availability_daily"):
-        if "vendor" in q:
-            extra = ", AVG(cssr_bh) AS cssr_bh" if has("cssr_bh") else ""
-            return f"SELECT vendor, AVG(tch_availability_daily) AS tch_availability_daily{extra} FROM {ALLOWED_TABLE}{df} GROUP BY vendor ORDER BY tch_availability_daily DESC LIMIT 100"
-        extra = ", AVG(cssr_bh) AS cssr_bh" if has("cssr_bh") else ""
-        return f"SELECT region, vendor, AVG(tch_availability_daily) AS tch_availability_daily{extra} FROM {ALLOWED_TABLE}{df} GROUP BY region, vendor ORDER BY tch_availability_daily DESC LIMIT 100"
-
-    # General CSSR summary (no site/cell/worst/best — aggregate by region or vendor)
-    if any(w in q for w in ["cssr", "call setup", "call success"]) and has("cssr_bh"):
-        if not any(w in q for w in ["site", "cell", "worst", "best", "top", "degraded"]):
-            if "vendor" in q:
-                return f"SELECT vendor, AVG(cssr_bh) AS cssr_bh FROM {ALLOWED_TABLE}{df} GROUP BY vendor ORDER BY cssr_bh DESC LIMIT 100"
-            return f"SELECT region, vendor, AVG(cssr_bh) AS cssr_bh FROM {ALLOWED_TABLE}{df} GROUP BY region, vendor ORDER BY cssr_bh DESC LIMIT 100"
-
-    # TCH drops summary
-    if any(w in q for w in ["tch drop", "tch_drop", "drop rate", "drops"]) and has("tch_drops_bh"):
-        group_by = "vendor" if "vendor" in q else ("region" if "region" in q else "site_name, region, vendor")
-        direction = "ASC" if any(w in q for w in ["worst", "highest", "most"]) else "DESC"
-        return f"SELECT {group_by}, AVG(tch_drops_bh) AS tch_drops_bh FROM {ALLOWED_TABLE}{df} GROUP BY {group_by} ORDER BY tch_drops_bh {direction} LIMIT {lim}"
-
-    if ("traffic" in q or "utilization" in q) and "site" in q:
-        if "utilization" in q and has("ultilization"):
-            direction = "ASC" if any(word in q for word in ["lowest", "worst", "low"]) else "DESC"
-            return f"SELECT site_name, region, vendor, AVG(ultilization) AS ultilization FROM {ALLOWED_TABLE}{df} GROUP BY site_name, region, vendor ORDER BY ultilization {direction} LIMIT {lim}"
-        if "traffic" in q and has("cs_traffic_daily"):
-            direction = "ASC" if any(word in q for word in ["lowest", "worst", "low"]) else "DESC"
-            return f"SELECT site_name, region, vendor, SUM(cs_traffic_daily) AS cs_traffic_daily FROM {ALLOWED_TABLE}{df} GROUP BY site_name, region, vendor ORDER BY cs_traffic_daily {direction} LIMIT {lim}"
-    if "vendor" in q and ("compare" in q or "comparison" in q):
-        metrics = ["AVG(cssr_bh) AS cssr_bh"] if has("cssr_bh") else []
-        if has("data_sr_bh"):
-            metrics.append("AVG(data_sr_bh) AS data_sr_bh")
-        if has("cs_traffic_daily"):
-            metrics.append("SUM(cs_traffic_daily) AS cs_traffic_daily")
-        if has("tch_availability_daily"):
-            metrics.append("AVG(tch_availability_daily) AS tch_availability_daily")
-        return f"SELECT vendor, {', '.join(metrics)} FROM {ALLOWED_TABLE} GROUP BY vendor ORDER BY vendor LIMIT 100" if metrics else None
-    if "trend" in q and has("date"):
-        metric = "SUM(cs_traffic_daily) AS cs_traffic_daily" if has("cs_traffic_daily") else "AVG(cssr_bh) AS cssr_bh"
-        return f"SELECT date, {metric} FROM {ALLOWED_TABLE} WHERE date >= CURRENT_DATE - INTERVAL '30 day' GROUP BY date ORDER BY date LIMIT 100"
+def get_kb_answer(question: str) -> str | None:
+    qn = f" {norm(question)} "
+    for key in sorted(TELECOM_KB, key=len, reverse=True):
+        if f" {norm(key)} " in qn:
+            return TELECOM_KB[key]
     return None
 
 
-def build_telecom_prompt(question: str, schema: str) -> tuple[str, str]:
-    """Returns (system, user). The system part is identical for every question, so Claude caches it."""
-    return build_telecom_system_prompt(schema), f"USER QUESTION:\n{question}"
+def meta_answer(question: str, cat) -> str | None:
+    """Questions about what data exists, answered from the catalog without SQL."""
+    if cat is None:
+        return None
+    q = question.lower()
+    qn = norm(question)
+    metric_words = [m for m in _find_metrics(qn)]
+    date_question = re.search(r"\b(kab se|kab tak|date range|data range|latest date|last date|which dates|till when|"
+                              r"up to which date|data kab|last updated|data freshness)\b", q)
+    if metric_words and not date_question and not re.search(r"\b(which|what|kaun|konse|kaunse|list)\s+(kpis?|metrics)\b", q):
+        return None
+    if re.search(r"\b(date range|data range|kab se|kab tak|latest date|last date|data available|available data|"
+                 r"which dates|kitne din ka data|data kab|till when|up to which date|how old is the data|"
+                 r"data kitna purana|data freshness|last updated|data ki date)\b", q):
+        return (f"The KPI table has data from **{cat.date_min}** to **{cat.date_max}** "
+                f"({cat.date_count} days, {cat.row_count:,} cell-day rows).\n\n"
+                f"Relative dates like *today*, *yesterday* and *last 7 days* are counted from **{cat.date_max}**, "
+                "the latest loaded day.")
+    if re.search(r"\b(which|what|list|kaun|kaunse|kaun se|konse|kitne|how many|all|sabhi|saare|sare)\b[\w\s]{0,20}\bregions?\b", q) \
+            and not re.search(r"\b(worst|best|top|kpi|cssr|traffic|performance|compare|degraded|sites?|cells?)\b", q):
+        counts = {}
+        for s in cat.sites.values():
+            counts[s["region"] or "Unknown"] = counts.get(s["region"] or "Unknown", 0) + 1
+        lines = [f"- **{r}** — {counts.get(r, 0)} site names" for r in cat.regions]
+        if cat.region_has_null:
+            lines.append(f"- *Unknown* (no region recorded) — {counts.get('Unknown', 0)} site names")
+        return "Regions in the KPI data:\n" + "\n".join(lines)
+    if re.search(r"\b(which|what|list|kaun|kaunse|kaun se|konse|all)\b[\w\s]{0,20}\b(technologies|technology|techs|vendors?)\b", q) \
+            and not re.search(r"\b(worst|best|top|kpi|cssr|traffic|performance|compare|degraded|sites?|cells?|by)\b", q):
+        return (f"Technologies: **{', '.join(cat.technologies)}**\n\nVendors: **{', '.join(cat.vendors)}**")
+    if re.search(r"\b(which|what|kaun|konse|kaunse|list)\s+(kpis?|metrics)\b|\bwhat data do you have\b|"
+                 r"\bwhat can you (do|analy[sz]e)\b|\bkya kya (data|kpi)\b", q):
+        lines = []
+        for mid in ("cssr_bh", "data_sr_bh", "tch_availability_daily", "drop_rate_bh", "tch_drops_daily", "cs_traffic_daily",
+                    "dl_volume_daily", "ul_volume_daily", "down_cells"):
+            m = METRICS[mid]
+            if cat.metric_available(mid):
+                techs = ", ".join(sorted(cat.metric_techs(mid))) or "all"
+                lines.append(f"- **{m.label}** — {m.description} ({techs})")
+        missing = [METRICS[m].label for m in METRICS
+                   if (METRICS[m].source or "daily") == "daily" and not cat.metric_available(m)]
+        tail = f"\n\nNot available in the data: {', '.join(missing)}." if missing else ""
+        extra = []
+        for sid, src in SOURCES.items():
+            if sid == "daily" or not cat.source_available(sid):
+                continue
+            smin, smax = cat.source_range(sid)
+            names = [METRICS[m].label.split(" (")[0] for m in METRICS
+                     if METRICS[m].source == sid and cat.metric_available(m)][:14]
+            extra.append(f"- **{src.label}** ({smin} to {smax}): {', '.join(names)}")
+        more = ("\n\n**Hourly and technology KPIs:**\n" + "\n".join(extra)) if extra else ""
+        return (f"I can analyse these KPIs for any site, cell, region, technology or date "
+                f"({cat.date_min} to {cat.date_max}):\n" + "\n".join(lines) + tail + more +
+                "\n\nTry: *worst 10 cells in Lilongwe by drop rate last 7 days*, "
+                "*LTE PRB utilization by region yesterday*, or *hourly traffic trend for Lilongwe yesterday*.")
+    return None
 
 
-def build_telecom_system_prompt(schema: str) -> str:
-    return f"""
-You are a PostgreSQL SQL generator for telecom analytics.
-Use only table {ALLOWED_TABLE}. Write one read-only SELECT query.
-Use only the allowed columns shown in the schema. Return SQL only.
-Return SQL only. No markdown. No explanation.
-Always include LIMIT {SQL_ROW_LIMIT} unless the query is an aggregate returning few rows.
+# ====================================================================== request parsing
 
-KPI DICTIONARY:
-{kpi_prompt_block()}
-
-RANKING DIRECTION RULES:
-- "worst", "degraded", "lowest", "below threshold" → ORDER BY metric ASC (lower is worse for CSSR, availability)
-- "best", "top", "highest", "good performing" → ORDER BY metric DESC (higher is better for CSSR, availability)
-- For traffic/utilization "top/highest" → ORDER BY metric DESC
-
-DATE RULES:
-- today = CURRENT_DATE
-- yesterday = CURRENT_DATE - INTERVAL '1 day'
-- last 7 days = date >= CURRENT_DATE - INTERVAL '7 day'
-- last 30 days = date >= CURRENT_DATE - INTERVAL '30 day'
-- this month = date >= DATE_TRUNC('month', CURRENT_DATE)
-- previous month = date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND date < DATE_TRUNC('month', CURRENT_DATE)
-
-TELECOM SQL EXAMPLES:
-{telecom_examples_block()}
-
-SCHEMA:
-{schema}
-
-Put the single SQL query in the "sql" field of your JSON answer.
-""".strip()
+def _clean_history(raw) -> list:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw[-MAX_HISTORY:]:
+        if not isinstance(item, dict) or item.get("role") not in ("user", "assistant"):
+            continue
+        entry = {"role": item["role"], "content": str(item.get("content") or "")[:2000]}
+        if item["role"] == "assistant" and isinstance(item.get("plan"), dict):
+            plan = Plan.from_dict(item["plan"])
+            if plan:
+                entry["plan"] = plan.to_dict()
+        out.append(entry)
+    return out
 
 
-def extract_sql(response: str) -> str:
-    response = response.strip()
-    fenced = re.search(r"```(?:sql)?\s*(.*?)```", response, flags=re.IGNORECASE | re.DOTALL)
-    if fenced:
-        response = fenced.group(1).strip()
-    match = re.search(r"\b(with|select)\b", response, flags=re.IGNORECASE)
-    if not match:
-        raise HTTPException(status_code=400, detail="Claude did not return SQL")
-    return response[match.start():].strip().rstrip(";")
-
-
-def validate_sql(sql: str, available_columns: set | None = None) -> str:
-    if not sql:
-        raise HTTPException(status_code=400, detail="SQL generation returned empty query")
-    allowed_columns = ALLOWED_COLUMNS if available_columns is None else (ALLOWED_COLUMNS & available_columns)
-    compact = re.sub(r"\s+", " ", sql).strip()
-    if ";" in compact:
-        raise HTTPException(status_code=400, detail="Only one SQL statement is allowed")
-    if not re.match(r"^(select|with)\b", compact, flags=re.IGNORECASE):
-        raise HTTPException(status_code=400, detail="Only SELECT queries are allowed")
-    if FORBIDDEN_SQL.search(compact):
-        raise HTTPException(status_code=400, detail="Unsafe SQL keyword found")
-    if re.search(r"\bselect\s+\*", compact, re.IGNORECASE) or re.search(r"\b[a-zA-Z_]\w*\.\*", compact):
-        raise HTTPException(status_code=400, detail="SELECT * is not allowed")
-    # Extract CTE names (WITH cte_name AS (...)) so they're valid table references
-    cte_names = {m.lower() for m in re.findall(r'\b(\w+)\s+as\s*\(', compact, re.IGNORECASE)}
-    table_refs = re.findall(r"\b(?:from|join)\s+([a-zA-Z_][\w.]*)(?:\s+(?:as\s+)?([a-zA-Z_]\w*))?", compact, re.IGNORECASE)
-    if not table_refs:
-        raise HTTPException(status_code=400, detail="SQL must reference the KPI table")
-    aliases = set()
-    has_allowed_table = False
-    for table_name, alias in table_refs:
-        tn = table_name.lower()
-        if tn == ALLOWED_TABLE:
-            has_allowed_table = True
-        elif tn not in cte_names:
-            raise HTTPException(status_code=400, detail=f"Table not allowed: {table_name}")
-        if alias and alias.lower() not in SQL_IGNORED_WORDS:
-            aliases.add(alias.lower())
-    if not has_allowed_table and not cte_names:
-        raise HTTPException(status_code=400, detail="SQL must reference the KPI table")
-    sql_without_literals = re.sub(r"'[^']*'", "", compact)
-    selected_aliases = set(re.findall(r"\bas\s+([a-zA-Z_]\w*)", sql_without_literals, re.IGNORECASE))
-    sql_for_columns = re.sub(re.escape(ALLOWED_TABLE), "", sql_without_literals, flags=re.IGNORECASE)
-    dotted_columns = re.findall(r"\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b", sql_for_columns)
-    for prefix, column in dotted_columns:
-        if prefix.lower() not in aliases and prefix.lower() not in cte_names and prefix.lower() != "c_dashboard_kpis":
-            raise HTTPException(status_code=400, detail=f"Unknown table alias: {prefix}")
-        if column.lower() not in allowed_columns:
-            raise HTTPException(status_code=400, detail=f"Column not allowed: {column}")
-    cleaned = re.sub(r"\b[a-zA-Z_]\w*\.[a-zA-Z_]\w*\b", "", sql_for_columns)
-    identifiers = set(re.findall(r"\b[a-zA-Z_]\w*\b", cleaned))
-    ignored = SQL_IGNORED_WORDS | aliases | cte_names | {a.lower() for a in selected_aliases} | {"kpi_multi_vendor", "c_dashboard_kpis"}
-    unknown = {
-        word for word in identifiers
-        if word.lower() not in ignored
-        and word.lower() not in allowed_columns
-        and not word.isdigit()
-    }
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Column not allowed: {sorted(unknown)[0]}")
-    if not re.search(r"\blimit\s+\d+\b", compact, flags=re.IGNORECASE):
-        compact += f" LIMIT {SQL_ROW_LIMIT}"
-    return compact
-
-
-def execute_sql(sql: str):
-    with engine.connect() as conn:
-        result = conn.execute(text(sql))
-        rows = []
-        for row in result.mappings().all():
-            rows.append({key: json_safe(value) for key, value in row.items()})
-        return rows
-
-
-def rewrite_to_latest_available_date(sql: str) -> str:
-    latest_date_expr = f"(SELECT MAX(date) FROM {ALLOWED_TABLE})"
-    replacements = {
-        "date = CURRENT_DATE - INTERVAL '1 day'": f"date = {latest_date_expr}",
-        "date = CURRENT_DATE": f"date = {latest_date_expr}",
-        "date >= CURRENT_DATE - INTERVAL '7 day'": f"date >= {latest_date_expr} - INTERVAL '7 day'",
-        "date >= CURRENT_DATE - INTERVAL '30 day'": f"date >= {latest_date_expr} - INTERVAL '30 day'",
-        "date >= DATE_TRUNC('month', CURRENT_DATE)": f"date >= DATE_TRUNC('month', {latest_date_expr})",
-    }
-    rewritten = sql
-    for old, new in replacements.items():
-        rewritten = re.sub(re.escape(old), new, rewritten, flags=re.IGNORECASE)
-    return rewritten
-
-
-def analyze_rows(rows: list) -> dict:
-    if pd is None:
-        raise HTTPException(status_code=500, detail="pandas is required for analytics processing")
-    if not rows:
-        return {
-            "row_count": 0,
-            "affected_regions": [],
-            "affected_vendors": [],
-            "top_entities": [],
-            "worst_entities": [],
-            "summary_metrics": {},
-        }
-    df = pd.DataFrame(rows)
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    entity_col = next((col for col in ["site_name", "cell_name", "region", "vendor"] if col in df.columns), None)
-    metric_col = next((col for col in numeric_cols if col not in {"row_count"}), None)
-    top_entities = []
-    worst_entities = []
-    if entity_col and metric_col:
-        ranked = df[[entity_col, metric_col]].dropna().sort_values(metric_col, ascending=False)
-        top_entities = ranked.head(5).to_dict("records")
-        worst_entities = ranked.tail(5).sort_values(metric_col).to_dict("records")
-    return {
-        "row_count": int(len(df)),
-        "affected_regions": sorted(df["region"].dropna().astype(str).unique().tolist()) if "region" in df else [],
-        "affected_vendors": sorted(df["vendor"].dropna().astype(str).unique().tolist()) if "vendor" in df else [],
-        "top_entities": top_entities,
-        "worst_entities": worst_entities,
-        "summary_metrics": {
-            col: {
-                "min": json_safe(df[col].min()),
-                "max": json_safe(df[col].max()),
-                "avg": json_safe(df[col].mean()),
-            }
-            for col in numeric_cols[:5]
-        },
-    }
-
-
-async def summarize_result(question: str, sql: str, rows: list, analytics: dict) -> str:
-    sample = json.dumps(rows[:50], ensure_ascii=False)
-    analytics_json = json.dumps(analytics, ensure_ascii=False)
-    user = f"""
-Question: {question}
-SQL: {sql}
-Rows JSON: {sample}
-Analytics JSON: {analytics_json}
-""".strip()
-    return await llm.complete(SUMMARY_SYSTEM_PROMPT, user, effort=llm.EFFORT_SUMMARY, timeout=60.0)
-
-
-SUMMARY_SYSTEM_PROMPT = """
-You are Yogi, DataYog's telecom analytics AI. Summarize the database query results below.
-Keep the answer factual and business-friendly.
-If rows are empty, say no matching data was found.
-Return exactly these sections:
-Overview:
-Key Findings:
-Recommendation:
-""".strip()
-
-
-def build_local_summary(question: str, rows: list, analytics: dict) -> str:
-    if not rows:
-        return (
-            "Overview:\nNo matching KPI data was found for this question.\n\n"
-            "Key Findings:\nThe query returned 0 rows.\n\n"
-            "Recommendation:\nCheck whether the requested date range and KPI columns exist in the database."
-        )
-    regions = ", ".join(analytics.get("affected_regions", [])[:5]) or "not included in this aggregate"
-    vendors = ", ".join(analytics.get("affected_vendors", [])[:5]) or "not included in this aggregate"
-    first = rows[0]
-    entity = first.get("site_name") or first.get("cell_name") or first.get("region") or first.get("vendor") or "top entity"
-    metric_parts = [
-        f"{key}={round(value, 3) if isinstance(value, float) else value}"
-        for key, value in first.items()
-        if isinstance(value, (int, float)) and key != "row_count"
-    ]
-    metric_line = f" Main metrics: {', '.join(metric_parts[:4])}." if metric_parts else ""
-    data_note = analytics.get("data_note")
-    note_line = f"\n\nData Note:\n{data_note}" if data_note else ""
-    return (
-        f"Overview:\nAnalyzed {len(rows)} KPI rows for: {question}.\n\n"
-        f"Key Findings:\nTop impacted entity is {entity}.{metric_line} Affected regions: {regions}. Vendors: {vendors}.\n\n"
-        f"Recommendation:\nPrioritize the worst ranked entities and check congestion, radio, transmission, and recent alarm history.{note_line}"
-    )
-
-
-def friendly_error_detail(error: Exception) -> str:
-    detail = getattr(error, "detail", None) or llm.friendly_error(error)
-    if not detail:
-        detail = "Unable to complete telecom analysis. Check PostgreSQL connectivity, KPI table data, and Claude API status."
-    return str(detail)
-
-
-async def run_telecom_analysis(question: str) -> dict:
-    total_start = time.perf_counter()
-    intent = detect_intent(question)
-    schema = get_postgres_schema()
-    if not schema:
-        raise HTTPException(status_code=500, detail=f"No columns found for {ALLOWED_TABLE}")
-    available_columns = get_available_kpi_columns()
-
-    generation_start = time.perf_counter()
-    generation_error = None
-    rule_sql = build_rule_based_sql(question, available_columns)
-    used_rule_sql = bool(rule_sql)
-    sql = validate_sql(rule_sql, available_columns) if rule_sql else None
-    if not sql:
-        for attempt in range(2):
-            try:
-                retry_context = ""
-                if attempt > 0 and generation_error:
-                    retry_context = f"\nPrevious attempt failed validation: {getattr(generation_error, 'detail', str(generation_error))}. Fix and return valid SQL only."
-                system_prompt, user_prompt = build_telecom_prompt(question, schema)
-                generated = await llm.generate_sql(system_prompt, user_prompt + retry_context)
-                sql = validate_sql(extract_sql(generated), available_columns)
-                used_rule_sql = False
-                break
-            except Exception as e:
-                generation_error = e
-        if not sql:
-            fallback_sql = build_rule_based_sql(question, available_columns)
-            if fallback_sql:
-                sql = validate_sql(fallback_sql, available_columns)
-                used_rule_sql = True
-    sql_generation_ms = round((time.perf_counter() - generation_start) * 1000, 2)
-    if not sql:
-        raise generation_error or HTTPException(status_code=400, detail="Unable to generate SQL")
-
-    execution_start = time.perf_counter()
-    rows = execute_sql(sql)
-    data_note = ""
-    if not rows and "current_date" in sql.lower():
-        latest_sql = validate_sql(rewrite_to_latest_available_date(sql), available_columns)
-        if latest_sql != sql:
-            latest_rows = execute_sql(latest_sql)
-            if latest_rows:
-                sql = latest_sql
-                rows = latest_rows
-                data_note = "No rows matched CURRENT_DATE filter, so analysis used the latest available date in the KPI table."
-    query_execution_ms = round((time.perf_counter() - execution_start) * 1000, 2)
-    analytics = analyze_rows(rows)
-    if data_note:
-        analytics["data_note"] = data_note
-    chart_type = recommend_chart(intent, len(rows))
-    chart_data = build_chart_data(rows, chart_type)
-    if used_rule_sql:
-        summary = build_local_summary(question, rows, analytics)
+def _claude_messages(history: list, prompt: str) -> list:
+    messages = []
+    for item in history:
+        text = item["content"].strip() or "(table and chart shown)"
+        if messages and messages[-1]["role"] == item["role"]:
+            messages[-1]["content"] += "\n\n" + text
+        else:
+            messages.append({"role": item["role"], "content": text})
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    if messages and messages[-1]["role"] == "user":
+        messages[-1]["content"] += "\n\n" + prompt
     else:
-        try:
-            summary = await summarize_result(question, sql, rows, analytics)
-        except Exception:
-            summary = build_local_summary(question, rows, analytics)
-    total_ms = round((time.perf_counter() - total_start) * 1000, 2)
-    save_query_history(question, sql, len(rows), query_execution_ms)
+        messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+async def _read_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    return body
+
+
+def _sse(payload) -> str:
+    if payload == "[DONE]":
+        return "data: [DONE]\n\n"
+    return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+LEGACY_ROWS = 100   # v1 clients always received at most 100 rows in telecom_data
+
+
+def _client_payload(result: dict, v2: bool = True) -> dict:
+    """telecom_data event. v1 keeps the original 8 keys with their original meaning; the rest are additions."""
+    intent = result["intent"]
+    if not v2 and intent == "threshold":
+        intent = "ranking"      # v1 only ever sent ranking/trend/comparison/distribution/summary
     return {
-        "question": question,
+        "rows": result["rows"][:analysis.UI_ROWS if v2 else LEGACY_ROWS],
+        "row_count": result["row_count"],
+        "truncated": result.get("truncated", False),
+        "columns": result.get("columns", []),
+        "chart_data": result.get("chart_data", {}),
+        "chart_type": result["chart_type"],
         "intent": intent,
-        "sql": sql,
-        "row_count": len(rows),
-        "chart_type": chart_type,
-        "chart_data": chart_data,
-        "analytics": analytics,
-        "summary": summary,
-        "rows": rows,
-        "metrics": {
-            "sql_generation_ms": sql_generation_ms,
-            "query_execution_ms": query_execution_ms,
-            "total_ms": total_ms,
-        },
+        "title": result.get("title"),
+        "sql": result["sql"],
+        "metrics": result["metrics"],
+        "question": result["question"],
+        "period": result.get("period"),
+        "filters": result.get("filters", {}),
+        "notes": result.get("notes", []),
+        "followups": result.get("followups", []),
+        "result_id": result.get("result_id"),
+        "plan": result.get("plan"),
+        "source": result.get("source"),
+        "data_source": result.get("data_source"),
     }
+
+
+# ====================================================================== streaming
+
+async def stream_analysis(question: str, history: list, follow_up: bool, v2: bool = False) -> AsyncGenerator[str, None]:
+    """v2: status events -> telecom_data (table/chart) -> summary streamed in chunks -> done.
+    v1 (default, original contract): one summary chunk -> telecom_data -> done."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def status(text: str):
+        await queue.put(text)
+
+    ctx = analysis.Context(engine=engine, question=question, history=history, follow_up=follow_up,
+                           status=status if v2 else None)
+    task = asyncio.create_task(analysis.execute_analysis(ctx))
+    if v2:
+        yield _sse({"status": "Finding sites, cells and KPIs in your question..."})
+    while not task.done():
+        try:
+            text = await asyncio.wait_for(queue.get(), timeout=0.25)
+            yield _sse({"status": text})
+        except asyncio.TimeoutError:
+            continue
+    try:
+        result = task.result()
+    except NotDataQuestion:
+        async for event in stream_general(question, history, allow_tool=False, v2=v2):
+            yield event
+        return
+    except AnalysisMessage as e:
+        yield _sse({"chunk": e.message})
+        if e.suggestions:
+            yield _sse({"suggestions": e.suggestions})
+        yield _sse({"done": True})
+        yield _sse("[DONE]")
+        return
+    except Exception as e:
+        log.exception("analysis failed")
+        detail = getattr(e, "detail", None) or friendly_db_error(e)
+        yield _sse({"chunk": f"Telecom analytics error: {detail}"})
+        yield _sse({"done": True})
+        yield _sse("[DONE]")
+        return
+
+    if not v2:
+        result["summary"] = await analysis.write_summary(result)
+        yield _sse({"chunk": result["summary"]})
+        yield _sse({"telecom_data": _client_payload(result, v2=False)})
+        yield _sse({"done": True})
+        yield _sse("[DONE]")
+        return
+
+    yield _sse({"telecom_data": _client_payload(result)})
+    yield _sse({"status": "Writing summary..."})
+    wrote = False
+    try:
+        async for chunk in llm.stream_chat(analysis.SUMMARY_SYSTEM_PROMPT, analysis.summary_user_message(result),
+                                           effort=llm.EFFORT_SUMMARY, max_tokens=4000, timeout=60.0):
+            wrote = True
+            yield _sse({"chunk": chunk})
+    except Exception as e:
+        log.warning("summary via Claude failed: %s", e)
+        if not wrote:
+            yield _sse({"chunk": analysis.build_local_summary(question, result["rows"], result["analytics"], result)})
+    yield _sse({"done": True})
+    yield _sse("[DONE]")
+
+
+async def stream_general(prompt: str, history: list, allow_tool: bool = True, v2: bool = False) -> AsyncGenerator[str, None]:
+    """General chat. Claude may hand a data question to the analytics pipeline via the tool."""
+    messages = _claude_messages(history, prompt)
+    tool_question = None
+    if not llm.available() and allow_tool and _telecom_words(prompt):
+        # Claude is down: a question that mentions the network still gets a data answer
+        async for event in stream_analysis(prompt, history, follow_up=is_follow_up(prompt, history), v2=v2):
+            yield event
+        return
+    wrote = False
+    try:
+        tools = [DATA_TOOL] if allow_tool else []
+        if tools:
+            async for event in llm.stream_chat_with_tools(YOGI_SYSTEM_PROMPT, messages, tools):
+                if event[0] == "text":
+                    wrote = True
+                    yield _sse({"chunk": event[1]})
+                elif event[0] == "tool" and event[1] == DATA_TOOL["name"]:
+                    q = str(event[2].get("question") or "").strip()
+                    if q:
+                        tool_question = q[:500]
+        else:
+            async for chunk in llm.stream_chat(YOGI_SYSTEM_PROMPT, messages):
+                wrote = True
+                yield _sse({"chunk": chunk})
+    except Exception as e:
+        if not wrote and allow_tool and _telecom_words(prompt):
+            async for event in stream_analysis(prompt, history, follow_up=is_follow_up(prompt, history), v2=v2):
+                yield event
+            return
+        yield _sse({"error": llm.friendly_error(e)})
+        if v2:
+            yield _sse({"done": True})
+            yield _sse("[DONE]")
+        return
+    if tool_question:
+        async for event in stream_analysis(tool_question, history, follow_up=False, v2=v2):
+            yield event
+        return
+    yield _sse({"done": True})
+    yield _sse("[DONE]")
+
+
+async def _single(events: list) -> AsyncGenerator[str, None]:
+    for e in events:
+        yield _sse(e)
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: Request):
+    """Server-Sent Events.
+
+    Request: {"prompt": str, "history"?: [{role, content, plan?}], "events"?: "v2"}
+    Default (v1, original contract): {chunk} ... {telecom_data} {done} [DONE]  (summary comes first, in one chunk)
+    v2: {status}* {telecom_data} {chunk}* {suggestions}? {done} [DONE]  (table/chart first, summary streamed)
+    Both: {error} on a chat failure; {suggestions} after an unmatched-name message.
+    """
+    body = await _read_body(request)
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+    prompt = prompt[:2000]
+    history = _clean_history(body.get("history"))
+    v2 = str(body.get("events") or "").lower() == "v2"
+    cat = _catalog_or_none()
+    if cat is None:
+        try:
+            cat = await asyncio.to_thread(get_catalog, engine)
+        except Exception:
+            cat = None
+    question_type = classify_question(prompt, history, cat)
+
+    if question_type == "telecom_db":
+        follow_up = is_follow_up(prompt, history)
+        return StreamingResponse(stream_analysis(prompt, history, follow_up, v2=v2), media_type="text/event-stream",
+                                 headers=SSE_HEADERS)
+    if question_type == "meta":
+        return StreamingResponse(_single([{"chunk": meta_answer(prompt, cat)}, {"done": True}, "[DONE]"]),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
+    if question_type == "off_topic":
+        return StreamingResponse(_single([{"chunk": OFF_TOPIC_RESPONSE}, {"done": True}, "[DONE]"]),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
+    if question_type == "telecom_knowledge":
+        kb_answer = get_kb_answer(prompt)
+        if kb_answer:
+            return StreamingResponse(_single([{"chunk": kb_answer}, {"done": True}, "[DONE]"]),
+                                     media_type="text/event-stream", headers=SSE_HEADERS)
+    return StreamingResponse(stream_general(prompt, history, v2=v2), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@app.post("/chat")
+async def chat_no_stream(request: Request):
+    """Non-streaming endpoint (fallback)."""
+    try:
+        body = await _read_body(request)
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt:
+            return JSONResponse({"response": "Error: Prompt is required"}, status_code=400)
+        history = _clean_history(body.get("history"))
+        cat = _catalog_or_none()
+        question_type = classify_question(prompt, history, cat)
+        if question_type == "off_topic":
+            return JSONResponse({"response": OFF_TOPIC_RESPONSE})
+        if question_type == "meta":
+            return JSONResponse({"response": meta_answer(prompt, cat)})
+        if question_type == "telecom_knowledge":
+            kb_answer = get_kb_answer(prompt)
+            if kb_answer:
+                return JSONResponse({"response": kb_answer})
+        if question_type == "telecom_db":
+            try:
+                result = await analysis.run_telecom_analysis(engine, prompt, history, is_follow_up(prompt, history))
+            except AnalysisMessage as e:
+                return JSONResponse({"response": e.message, "suggestions": e.suggestions})
+            except NotDataQuestion:
+                pass
+            else:
+                return JSONResponse({"response": format_telecom_chat_response(result),
+                                     "data": _limit_rows(result, body.get("max_rows"))})
+        answer = await llm.complete(YOGI_SYSTEM_PROMPT, _claude_messages(history, prompt), effort=llm.EFFORT_CHAT)
+        return JSONResponse({"response": answer})
+    except Exception as e:
+        return JSONResponse({"response": f"Error: {llm.friendly_error(e)}"}, status_code=500)
 
 
 def markdown_table(rows: list, limit: int = 10) -> str:
@@ -1105,29 +695,52 @@ def format_telecom_chat_response(result: dict) -> str:
         result["summary"],
         "",
         f"**Rows analyzed:** {result['row_count']}",
+        f"**Period:** {result.get('period')}",
         f"**Intent:** {result['intent']}",
         f"**Recommended chart:** {result['chart_type']}",
     ]
+    if result.get("notes"):
+        parts += ["", "**Notes:** " + " ".join(result["notes"])]
     if table:
         parts.extend(["", "**Top result rows:**", table])
     parts.extend(["", "**Generated SQL:**", f"```sql\n{result['sql']}\n```"])
     return "\n".join(parts)
 
 
+def _limit_rows(result: dict, max_rows=None) -> dict:
+    """JSON endpoints return at most 100 rows by default (as before); clients may ask for up to 2000."""
+    try:
+        n = int(max_rows) if max_rows is not None else LEGACY_ROWS
+    except (TypeError, ValueError):
+        n = LEGACY_ROWS
+    n = max(1, min(n, analysis.MAX_ROWS))
+    out = dict(result)
+    out["rows"] = result["rows"][:n]
+    return out
+
+
 @app.post("/telecom/query")
 async def telecom_query(request: Request):
+    body = await _read_body(request)
+    question = str(body.get("question") or body.get("prompt") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    history = _clean_history(body.get("history"))
     try:
-        body = await request.json()
-        question = body.get("question") or body.get("prompt") or ""
-        question = question.strip()
-        if not question:
-            raise HTTPException(status_code=400, detail="question is required")
-
-        return JSONResponse(await run_telecom_analysis(question))
+        result = await analysis.run_telecom_analysis(engine, question, history, is_follow_up(question, history))
+    except AnalysisMessage as e:
+        return JSONResponse({"detail": e.message, "question": question, "message": e.message,
+                             "suggestions": e.suggestions, "rows": [], "row_count": 0}, status_code=422)
+    except NotDataQuestion:
+        msg = "This is not a question about the KPI data."
+        return JSONResponse({"detail": msg, "question": question, "message": msg,
+                             "rows": [], "row_count": 0}, status_code=422)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.exception("telecom query failed")
+        raise HTTPException(status_code=500, detail=friendly_db_error(e))
+    return JSONResponse(_limit_rows(result, body.get("max_rows")))
 
 
 @app.get("/api/kpi-metadata")
@@ -1135,9 +748,43 @@ async def kpi_metadata():
     return JSONResponse(KPI_DICTIONARY)
 
 
+@app.get("/api/kpis")
+async def kpi_registry():
+    cat = _catalog_or_none()
+    return JSONResponse([{
+        "id": m.id, "label": m.label, "unit": m.unit, "better": m.better, "description": m.description,
+        "source": m.source or "daily",
+        "available": cat.metric_available(m.id) if cat else None,
+        "technologies": sorted(cat.metric_techs(m.id)) if cat else None,
+    } for m in METRICS.values()])
+
+
+@app.get("/api/catalog")
+async def catalog_info():
+    try:
+        cat = await asyncio.to_thread(get_catalog, engine)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=friendly_db_error(e))
+    example_sites = [g["display"] for g in list(cat.groups.values()) if len(g["sites"]) >= 3][:6]
+    return JSONResponse({
+        "date_min": json_safe(cat.date_min), "date_max": json_safe(cat.date_max), "days": cat.date_count,
+        "regions": cat.regions, "technologies": cat.technologies, "vendors": cat.vendors,
+        "sites": len(cat.groups), "site_names": len(cat.sites), "cells": len(cat.cells),
+        "example_sites": example_sites,
+    })
+
+
+@app.get("/api/suggest")
+async def suggest(q: str = ""):
+    cat = _catalog_or_none()
+    if cat is None or len(q.strip()) < 2:
+        return JSONResponse([])
+    return JSONResponse(cat.autocomplete(q.strip()[:80]))
+
+
 @app.get("/api/query-history")
 async def query_history():
-    init_query_history()
+    analysis.init_query_history()
     with sqlite3.connect(HISTORY_DB) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
@@ -1150,27 +797,41 @@ async def query_history():
 
 
 @app.get("/api/export/csv")
-async def export_csv(question: str):
-    if not question.strip():
-        raise HTTPException(status_code=400, detail="question is required")
-    result = await run_telecom_analysis(question.strip())
-    rows = result["rows"]
+async def export_csv(question: str = "", id: str = ""):
+    sql, name = None, question
+    if id:
+        cached = analysis.cached_result(id)
+        if cached:
+            sql, name = cached["sql"], cached["question"]
+    if sql is None:
+        if not question.strip():
+            raise HTTPException(status_code=400, detail="question is required")
+        try:
+            result = await analysis.execute_analysis(analysis.Context(engine=engine, question=question.strip()))
+        except AnalysisMessage as e:
+            raise HTTPException(status_code=404, detail=e.message)
+        sql = result["sql"]
+    try:
+        cat = await asyncio.to_thread(get_catalog, engine)
+        validate_sql(sql, set(cat.columns))
+        rows, _ = await asyncio.to_thread(execute_readonly, engine, sql.rsplit("LIMIT", 1)[0] + f" LIMIT {analysis.EXPORT_ROWS}"
+                                          if re.search(r"\nLIMIT \d+$", sql) else sql, analysis.EXPORT_ROWS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=friendly_db_error(e))
     if not rows:
         raise HTTPException(status_code=404, detail="No data found for this query")
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=rows[0].keys())
     writer.writeheader()
     writer.writerows(rows)
-    filename = re.sub(r"[^a-zA-Z0-9_-]", "_", question.strip()[:40])
+    filename = re.sub(r"[^a-zA-Z0-9_-]", "_", (name or "export").strip()[:40]) or "export"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
     )
-
-
-
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 
 
 @app.get("/uploads/{filename}")

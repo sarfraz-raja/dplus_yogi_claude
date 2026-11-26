@@ -1,10 +1,23 @@
 # Secrets (keep .env.example)
 .env
+.env.*
+!.env.example
 
 # Tests (local only)
 tests/
+test_*.py
+*_test.py
 pytest.ini
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Local scratch / debug output
+*.pkl
+*.sse
+*.png
+!app/uploads/*.png
+.claude/
 
 # Python
 __pycache__/
